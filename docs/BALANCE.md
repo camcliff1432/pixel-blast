@@ -45,3 +45,18 @@ For comparison, the previous prices (start 60, win 20, continue 20) gave a 99% w
 - **The curve is flat.** Levels 1–6 all sit between 53% and 76%. Plan for a sawtooth: easy, easy, medium, then a "hard" level every 5th or so.
 - **Continues are now a real decision.** A wallet that stays flat (42 → 59), about 8 continues bought per 23 levels, and in about a quarter of jams the player wants one but can't afford it. Those are the moments for a rewarded ad ("watch an ad to continue") once ads exist.
 - **Caveat:** the bot isn't a human. Real players place slower, misjudge colors, and sometimes play better. Validate with real play-tests before locking numbers.
+
+## Big pictures (added with 12 colors and up to 32×32)
+
+Large pictures were nearly unwinnable at first: a 1024-pixel, 8-color sunset gave the bot a 0–8% first-try win. Adding more ammo barely helped. The bottleneck was belt throughput: more placements meant more chances to jam. The fix is automatic scaling, and pictures up to 12×12 are unchanged:
+
+| Picture size | Shots per block | Belt capacity | Lap time |
+| --- | --- | --- | --- |
+| up to 12×12 / under 150 px | 1 | 5 | 5.7 s |
+| 16×16 (256 px) | 3 | 6 | 5.4 s |
+| 24×24 (576 px) | 6 | 9 | 4.7 s |
+| 32×32 (1024 px) | 10 | 10 | 4.0 s |
+
+Bot results on the test sunset after scaling (12 runs each): 16×16 58%, 24×24 50%, 32×32 42% first-try wins, and 100% with continues, at about 45–60 s. Sand mode is about 0–8 points harder.
+
+Same-color shooters now merge in the queue. Win rates are unchanged, and lost shots dropped to zero.

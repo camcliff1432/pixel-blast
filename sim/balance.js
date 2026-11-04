@@ -15,7 +15,11 @@ const runs = +opt('runs', 100);
 const think = +opt('think', 1.2);
 const only = opt('level', null);
 const cfg = {};
-for (const k of Object.keys(DEFAULTS)) { const v = opt(k, null); if (v != null) cfg[k] = +v; }
+for (const k of Object.keys(DEFAULTS)) {
+  const v = opt(k, null);
+  if (v != null) cfg[k] = v === 'true' ? true : v === 'false' ? false : +v;
+}
+if (args.includes('--sand')) cfg.sand = true;
 
 const pct = x => (x * 100).toFixed(0).padStart(4) + '%';
 const pad = (s, n) => String(s).padEnd(n);

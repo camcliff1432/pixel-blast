@@ -15,8 +15,8 @@ Open `index.html` in a browser. There's no build step or install.
 
 Open `tools/editor.html` (or use the "Level editor" link on the game's menu):
 
-- Paint pixels on an 8×8 to 16×16 grid, or **import an image** and it snaps to the game colors.
-- **Simulate 40 bot games** for an instant difficulty rating (Easy / Medium / Hard).
+- Paint pixels on an 8×8 to 32×32 grid with 12 colors, or **import an image**: it snaps to the game colors (pick how many, 2–12). Changing the size rebuilds from the image.
+- **Simulate bot games** for an instant difficulty rating (Easy / Medium / Hard), in Classic or Sand mode.
 - **Play-test** the level in the game, then copy the level code into `src/levels.js`.
 
 ## Tune the balance (needs Node.js)

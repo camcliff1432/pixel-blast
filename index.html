@@ -18,7 +18,7 @@
 <script>
 (() => {
 'use strict';
-const { Game, KEYS, fullLines } = PBCore;
+const { Game, PALETTE, RAINBOW, fullLines } = PBCore;
 const LEVELS = PB_LEVELS;
 
 const ECON = PB_ECON; // prices and rewards: src/economy.js
@@ -38,7 +38,9 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-const COL = { R: '#ef4444', B: '#3b82f6', Y: '#facc15', G: '#22c55e', W: '#f8fafc' };
+const COL = Object.assign({ [RAINBOW]: '#f8fafc' }, PALETTE);
+const RAINBOW_RING = ['R', 'Y', 'G', 'B'];
+const LIGHT = new Set(['Y', 'L', 'A', 'K', 'O']); // colors that need dark text on top
 
 // ---------- layout ----------
 const PIC = 220, BELT = 24;
@@ -48,7 +50,8 @@ const BN = 8, BC = 34, BX = (W - BN * BC) / 2, BY = 398;
 const TRAY_Y = 680, TRAY_CELL = 20;
 
 // ---------- state ----------
-let mode = 'menu', game = null, levelIndex = 0, endless = false, testLevel = null;
+let mode = 'menu', game = null, levelIndex = 0, endless = false, testLevel = null, sandMode = false;
+let fallOff = new Map(); // sand mode: 'x,y' -> remaining fall distance in cells (negative)
 let effects = [], projs = [], toasts = [], drag = null, buttons = [], time = 0, winDelay = 0;
 let coins = ECON.startCoins, streak = 0, album = new Set(), result = null;
 try {
@@ -66,8 +69,8 @@ function start(idx, isEndless, level) {
   endless = !!isEndless;
   levelIndex = idx;
   const lv = level || (isEndless ? LEVELS[Math.floor(Math.random() * LEVELS.length)] : LEVELS[idx]);
-  game = new Game(lv);
-  effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null;
+  game = new Game(lv, { sand: sandMode });
+  effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
 function useBooster(kind) {
@@ -75,7 +78,7 @@ function useBooster(kind) {
   const cost = ECON.booster[kind];
   if (coins < cost) { toast(`Need ${cost} coins`, '#fca5a5'); return; }
   if (kind === 'rainbow') {
-    if (!game.addShooter('W', game.cfg.rainbowAmmo)) { toast('Queue is full', '#fca5a5'); return; }
+    if (!game.addRainbow()) { toast('Queue is full', '#fca5a5'); return; }
     toast('Rainbow shooter: hits any color', '#f8fafc');
   } else {
     game.shuffleTray();
@@ -115,6 +118,12 @@ function handleEvents() {
     } else if (e.type === 'fire') {
       const [sx, sy] = slotXY(e.slot), pc = PC();
       projs.push({ sx, sy, tx: PIC_X + e.x * pc + pc / 2, ty: PIC_Y + e.y * pc + pc / 2, px: e.x, py: e.y, color: e.color, pcolor: e.pcolor, t: 0 });
+    } else if (e.type === 'fall') {
+      for (const f of e.falls) {
+        const prev = fallOff.get(`${f.x},${f.from}`) || 0;
+        fallOff.delete(`${f.x},${f.from}`);
+        fallOff.set(`${f.x},${f.to}`, prev + (f.from - f.to));
+      }
     } else if (e.type === 'spent') {
       const [x, y] = posXY(e.pos);
       effects.push({ type: 'poof', x, y, color: e.color, t: 0 });
@@ -165,6 +174,7 @@ function updateFx(dt) {
   }
   for (let i = effects.length - 1; i >= 0; i--) { effects[i].t += dt; if (effects[i].t > 0.4) effects.splice(i, 1); }
   for (let i = toasts.length - 1; i >= 0; i--) { toasts[i].t += dt; if (toasts[i].t > 1.8) toasts.splice(i, 1); }
+  for (const [k, v] of fallOff) { const nv = v + dt * 16; if (nv >= 0) fallOff.delete(k); else fallOff.set(k, nv); }
 }
 function toast(text, color) {
   toasts.push({ text, color: color || '#fff', t: 0 });
@@ -183,6 +193,12 @@ function rr(x, y, w, h, r) {
 }
 function block(x, y, s, c, alpha = 1) {
   ctx.globalAlpha = alpha;
+  if (s < 11) { // tiny pixels in big pictures: plain squares
+    ctx.fillStyle = COL[c];
+    ctx.fillRect(x + 0.4, y + 0.4, s - 0.8, s - 0.8);
+    ctx.globalAlpha = 1;
+    return;
+  }
   rr(x + 1, y + 1, s - 2, s - 2, Math.min(6, s * 0.2));
   ctx.fillStyle = COL[c];
   ctx.fill();
@@ -199,8 +215,8 @@ function text(t, x, y, size, color, align = 'center', weight = '600') {
   ctx.fillText(t, x, y);
 }
 function shooter(x, y, r, c, ammo) {
-  if (c === 'W') {
-    KEYS.forEach((k, i) => {
+  if (c === RAINBOW) {
+    RAINBOW_RING.forEach((k, i) => {
       ctx.beginPath(); ctx.moveTo(x, y);
       ctx.arc(x, y, r, i * Math.PI / 2 + time * 3, (i + 1) * Math.PI / 2 + time * 3);
       ctx.closePath(); ctx.fillStyle = COL[k]; ctx.fill();
@@ -218,7 +234,7 @@ function shooter(x, y, r, c, ammo) {
   ctx.lineWidth = 2;
   ctx.strokeStyle = 'rgba(255,255,255,.85)';
   ctx.stroke();
-  text(String(ammo), x, y + 0.5, r * 0.95, c === 'Y' ? '#3b2f00' : '#fff', 'center', '800');
+  text(String(ammo), x, y + 0.5, r * (ammo > 99 ? 0.75 : 0.95), LIGHT.has(c) ? '#2a2310' : '#fff', 'center', '800');
 }
 function button(label, x, y, w, h, fn, primary) {
   rr(x, y, w, h, 12);
@@ -234,9 +250,9 @@ function drawCoin(x, y, r) {
 function drawBooster(kind, x, y) {
   const w = 54, h = 66, cost = ECON.booster[kind], can = coins >= cost;
   rr(x, y, w, h, 10); ctx.fillStyle = '#262a35'; ctx.fill();
-  if (kind === 'rainbow') shooter(x + w / 2, y + 22, 12, 'W', game.cfg.rainbowAmmo);
+  if (kind === 'rainbow') shooter(x + w / 2, y + 22, 12, RAINBOW, game.cfg.rainbowAmmo * game.ammoPerBlock);
   else {
-    for (let i = 0; i < 3; i++) block(x + 9 + i * 12, y + 12 + (i % 2) * 6, 12, KEYS[i]);
+    for (let i = 0; i < 3; i++) block(x + 9 + i * 12, y + 12 + (i % 2) * 6, 12, RAINBOW_RING[i]);
     ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2;
     ctx.beginPath(); ctx.arc(x + w / 2, y + 22, 16, -0.4, 2.4); ctx.stroke();
   }
@@ -267,9 +283,9 @@ function render() {
   const n = N(), pc = PC();
 
   // HUD
-  const title = testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : game.level.name;
-  text(title, 16, 26, 17, '#f1f5f9', 'left', '700');
-  text(`${game.countPixels()} px left`, W / 2 + 18, 26, 14, '#94a3b8');
+  const title = (game.sandMode ? 'Sand · ' : '') + (testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : game.level.name);
+  text(title, 16, 22, 16, '#f1f5f9', 'left', '700');
+  text(`${game.countPixels()} px left`, 16, 42, 11, '#94a3b8', 'left', '700');
   text(`${game.score}`, W - 52, 26, 17, '#fde68a', 'right', '800');
   rr(W - 42, 12, 30, 28, 8); ctx.fillStyle = '#262a35'; ctx.fill();
   text('☰', W - 27, 26, 16, '#e2e8f0');
@@ -291,7 +307,12 @@ function render() {
   // picture
   ctx.fillStyle = '#181b23';
   ctx.fillRect(PIC_X, PIC_Y, PIC, PIC);
-  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) if (game.pic[y][x]) block(PIC_X + x * pc, PIC_Y + y * pc, pc, game.pic[y][x]);
+  for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+    const c = game.pic[y][x];
+    if (!c) continue;
+    const off = fallOff.size ? (fallOff.get(`${x},${y}`) || 0) : 0;
+    block(PIC_X + x * pc, PIC_Y + (y + off) * pc, pc, c);
+  }
   for (const p of projs) block(PIC_X + p.px * pc, PIC_Y + p.py * pc, pc, p.pcolor, 0.85);
   for (const e of effects) {
     const k = e.t / 0.4;
@@ -322,7 +343,7 @@ function render() {
   drawBooster('shuffle', 340, 168);
 
   // queue
-  text(`TAP A SHOOTER TO LAUNCH  ·  BELT ${game.belt.length}/${game.cfg.beltCap}`, W / 2, 335, 10, '#64748b', 'center', '700');
+  text(`TAP A SHOOTER TO LAUNCH  ·  BELT ${game.belt.length}/${game.beltCap}`, W / 2, 335, 10, '#64748b', 'center', '700');
   for (let i = 0; i < QN; i++) {
     const x = QX + i * (QW + QG);
     rr(x, QY, QW, QH, 10);
@@ -399,22 +420,30 @@ function drawMenu() {
     'the colors match.',
     'Clear the picture to win. Jam the board and you lose.',
   ];
-  lines.forEach((l, i) => text(l, W / 2, 126 + i * 18, 12.5, '#cbd5e1', 'center', '500'));
+  lines.forEach((l, i) => text(l, W / 2, 122 + i * 17, 12, '#cbd5e1', 'center', '500'));
+  // mode toggle
+  [['Classic', false], ['Sand', true]].forEach(([label, v], i) => {
+    const bx = W / 2 - 104 + i * 108, by = 248, on = sandMode === v;
+    rr(bx, by, 100, 30, 15); ctx.fillStyle = on ? '#fde68a' : '#262a35'; ctx.fill();
+    text(label, bx + 50, by + 15, 13, on ? '#111827' : '#cbd5e1', 'center', '800');
+    buttons.push({ x: bx, y: by, w: 100, h: 30, fn: () => { sandMode = v; } });
+  });
+  if (sandMode) text('Sand: pixels above a shot pixel fall down', W / 2, 290, 11, '#fde68a', 'center', '600');
   // album
-  text(`ALBUM  ${album.size}/${LEVELS.length}  ·  tap a picture to play it`, W / 2, 268, 11, '#94a3b8', 'center', '800');
+  text(`ALBUM  ${album.size}/${LEVELS.length}  ·  tap a picture to play it`, W / 2, 306, 11, '#94a3b8', 'center', '800');
   const perRow = 4, s = 52, gap = 30;
   LEVELS.forEach((lv, i) => {
     const row = Math.floor(i / perRow), col = i % perRow;
     const inRow = Math.min(perRow, LEVELS.length - row * perRow);
     const x0 = (W - (inRow * s + (inRow - 1) * gap)) / 2;
-    const x = x0 + col * (s + gap), y = 288 + row * 92;
+    const x = x0 + col * (s + gap), y = 324 + row * 88;
     const has = album.has(lv.name);
     drawThumb(lv, x, y, s, has);
     text(`${i + 1}. ${lv.name}`, x + s / 2, y + s + 15, 10, has ? '#e2e8f0' : '#64748b', 'center', '700');
     buttons.push({ x: x - 4, y: y - 4, w: s + 8, h: s + 26, fn: () => start(i, false) });
   });
   // wallet + streak
-  const wy = 288 + Math.ceil(LEVELS.length / perRow) * 92 + 4;
+  const wy = 324 + Math.ceil(LEVELS.length / perRow) * 88;
   rr(40, wy, W - 80, 58, 14); ctx.fillStyle = '#1a1d25'; ctx.fill();
   drawCoin(80, wy + 29, 12);
   text(`${coins} coins`, 100, wy + 29, 16, '#fde68a', 'left', '800');

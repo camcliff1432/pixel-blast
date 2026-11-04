@@ -75,3 +75,28 @@ Fallback for a faster iOS-only release: wrap the existing HTML in **Capacitor**.
 - TikTok: [Publication stage requirements](https://developers.tiktok.com/doc/mini-games-publication-stage)
 - Apple: [App Store Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)
 - Apple: [Apple Developer Program](https://developer.apple.com/programs/)
+
+---
+
+## Game modes
+
+**Built**
+- **Classic:** clear the picture, using levels and an album.
+- **Sand:** pixels above a shot pixel fall down. A toggle on the menu, or `sand: true` on a level. It changes which pixels are exposed, so the order you shoot in matters.
+- **Endless:** pictures keep coming until the board jams.
+
+**Ideas, roughly by effort (small → big)**
+| Mode | How it plays | Why it's interesting |
+| --- | --- | --- |
+| Daily Puzzle | Same picture and same seed (same piece order) for everyone each day; score = moves used | A reason to open the app daily; shareable result like Wordle |
+| Zen | No jams: the tray reshuffles automatically when stuck; no coins | Relaxing mode for players who just want to finish pictures |
+| Mystery Picture | The picture starts gray and each pixel's color shows only when it's exposed on the outside | Reveal-the-image curiosity; pairs with the album |
+| Time Rush | Clear before the timer ends; the belt speeds up as time runs low | High energy, good for short video clips |
+| Move Puzzle | Hand-made levels with a fixed piece sequence and a move limit | Pure logic levels; no randomness |
+| Layers | Clearing a picture reveals a second picture underneath | Bigger "payoff" levels; good for chapter finales |
+| Tilt Sand | Sand mode plus a button that changes the direction gravity pulls | Combines the tilt-puzzle idea with sand |
+| Boss Picture | A creature picture regrows a pixel every few seconds; out-pace it | Tension and a clear villain |
+| Paint Mode (reverse) | Shooters *add* pixels to a blank canvas to recreate a target picture | Same mechanics, opposite fantasy: creating, not destroying |
+| Sandstorm (endless) | New sand pixels rain onto the picture from the top over time | An endless survival mode with rising pressure |
+| Special pixels | Stone (2 hits), bomb (clears neighbors), key (unlocks a locked region) | Adds variety to classic levels every ~10 levels |
+| Duel (async) | Two players get the same seed; whoever clears in fewer moves wins | Social without needing real-time networking |

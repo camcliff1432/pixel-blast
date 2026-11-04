@@ -80,6 +80,7 @@
       </div>
       <div class="row" style="margin-top:8px">
         <label class="check"><input type="checkbox" id="bgRemove" checked> Make the background empty</label>
+        <label style="flex:0 0 140px">Colors to use <select id="maxColors"></select></label>
       </div>
       <div class="gridnote">The image is shrunk to the grid size and each pixel snaps to the nearest game color. Simple, high-contrast images work best.</div>
       <div id="imgStatus" class="row" style="margin-top:8px;display:none">
@@ -96,7 +97,8 @@
     <div class="card">
       <h2>Difficulty check</h2>
       <div class="row">
-        <button id="sim">Simulate 40 bot games</button>
+        <button id="sim">Simulate bot games</button>
+        <label class="check"><input type="checkbox" id="sandMode"> Sand mode (pixels fall)</label>
         <button id="play" class="primary">Play-test in game</button>
       </div>
       <div id="simOut"></div>
@@ -118,9 +120,8 @@
 <script>
 (() => {
 'use strict';
-const COL = { R: '#ef4444', B: '#3b82f6', Y: '#facc15', G: '#22c55e' };
-const NAMES = { R: 'Red', B: 'Blue', Y: 'Yellow', G: 'Green' };
-const RGB = { R: [239, 68, 68], B: [59, 130, 246], Y: [250, 204, 21], G: [34, 197, 94] };
+const { PALETTE: COL, COLOR_NAMES: NAMES, KEYS } = PBCore;
+const RGB = Object.fromEntries(Object.entries(COL).map(([k, h]) => [k, [1, 3, 5].map(i => parseInt(h.slice(i, i + 2), 16))]));
 const $ = id => document.getElementById(id);
 
 let N = 10, cells = blank(10), paint = 'R', tool = 'brush';
@@ -130,9 +131,11 @@ function rows() { return cells.map(r => r.map(c => c || '.').join('')); }
 function slug(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'level'; }
 
 // ---------- setup ----------
-for (let s = 8; s <= 16; s++) $('size').add(new Option(`${s} × ${s}`, s));
+for (const s of [8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 24, 28, 32]) $('size').add(new Option(`${s} × ${s}`, s));
+for (let k = 2; k <= KEYS.length; k++) $('maxColors').add(new Option(`${k} colors`, k));
+$('maxColors').value = 6;
 PB_LEVELS.forEach((l, i) => $('preset').add(new Option(`${l.name} (${l.rows.length}×${l.rows.length})`, i)));
-for (const k of [...Object.keys(COL), null]) {
+for (const k of [...KEYS, null]) {
   const b = document.createElement('button');
   b.className = 'swatch' + (k === 'R' ? ' on' : '');
   b.title = k ? NAMES[k] : 'Eraser';
@@ -227,14 +230,28 @@ $('clear').onclick = () => { cells = blank(N); sourceImg = null; $('file').value
 $('name').oninput = () => changed(true);
 
 // ---------- image import ----------
-function nearest(r, g, b) {
+// perceptual-ish color distance ("redmean")
+function cdist(a, b) {
+  const rm = (a[0] + b[0]) / 2, dr = a[0] - b[0], dg = a[1] - b[1], db = a[2] - b[2];
+  return (2 + rm / 256) * dr * dr + 4 * dg * dg + (2 + (255 - rm) / 256) * db * db;
+}
+function nearest(px, keys) {
   let best = null, bd = Infinity;
-  for (const k in RGB) {
-    const [R, G, B] = RGB[k];
-    const d = 2 * (r - R) ** 2 + 4 * (g - G) ** 2 + 3 * (b - B) ** 2;
-    if (d < bd) { bd = d; best = k; }
-  }
+  for (const k of keys) { const d = cdist(px, RGB[k]); if (d < bd) { bd = d; best = k; } }
   return best;
+}
+// With a known background: treat the pixel as bg + a * (color - bg); mostly-background pixels become empty.
+function unmix(px, keys, bg) {
+  const p = [px[0] - bg[0], px[1] - bg[1], px[2] - bg[2]];
+  let best = null, bestErr = Infinity, bestA = 0;
+  for (const k of keys) {
+    const v = [RGB[k][0] - bg[0], RGB[k][1] - bg[1], RGB[k][2] - bg[2]];
+    const vv = v[0] * v[0] + v[1] * v[1] + v[2] * v[2] || 1;
+    const a = Math.max(0, Math.min(1, (p[0] * v[0] + p[1] * v[1] + p[2] * v[2]) / vv));
+    const err = (p[0] - a * v[0]) ** 2 + (p[1] - a * v[1]) ** 2 + (p[2] - a * v[2]) ** 2;
+    if (err < bestErr) { bestErr = err; best = k; bestA = a; }
+  }
+  return bestA < 0.5 ? null : best;
 }
 let sourceImg = null; // last imported image, kept so size changes can rebuild from it
 function showImgStatus() {
@@ -254,58 +271,55 @@ $('file').onchange = () => {
 };
 $('reconvert').onclick = () => { if (sourceImg) { convertImage(); changed(); } };
 $('forget').onclick = () => { sourceImg = null; $('file').value = ''; showImgStatus(); };
-$('bgRemove').onchange = () => { if (sourceImg) { convertImage(); changed(); } };
+$('bgRemove').onchange = $('maxColors').onchange = () => { if (sourceImg) { convertImage(); changed(); } };
+$('sandMode').onchange = () => changed(true);
 function convertImage() {
   const img = sourceImg.img;
-  {
-    const c = document.createElement('canvas'); c.width = N; c.height = N;
-    const x = c.getContext('2d');
-    x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
-    const s = Math.min(N / img.width, N / img.height), w = img.width * s, h = img.height * s;
-    x.drawImage(img, (N - w) / 2, (N - h) / 2, w, h);
-    const d = x.getImageData(0, 0, N, N).data;
-    cells = blank(N);
-    for (let yy = 0; yy < N; yy++) for (let xx = 0; xx < N; xx++) {
-      const i = (yy * N + xx) * 4;
-      cells[yy][xx] = d[i + 3] < 128 ? null : nearest(d[i], d[i + 1], d[i + 2]);
-    }
-    if ($('bgRemove').checked) {
-      // Background = average of the original image's corners. Clear every pixel close to that
-      // color that is connected to the edge (so blurry edge pixels don't become stray colors).
-      const full = document.createElement('canvas'); full.width = img.width; full.height = img.height;
-      const fx = full.getContext('2d'); fx.drawImage(img, 0, 0);
-      const corner = (cx, cy) => fx.getImageData(cx, cy, 1, 1).data;
-      const cs = [corner(0, 0), corner(img.width - 1, 0), corner(0, img.height - 1), corner(img.width - 1, img.height - 1)];
-      if (cs.every(p => p[3] >= 128)) {
-        const bg = [0, 1, 2].map(k => cs.reduce((s, p) => s + p[k], 0) / 4);
-        // Treat each pixel as a blend: bg + a * (gameColor - bg). Pick the game color that
-        // explains the pixel best; if it's mostly background (a < 0.5) the pixel becomes empty.
-        for (let yy = 0; yy < N; yy++) for (let xx = 0; xx < N; xx++) {
-          const i = (yy * N + xx) * 4;
-          if (d[i + 3] < 128) { cells[yy][xx] = null; continue; }
-          const px = [d[i] - bg[0], d[i + 1] - bg[1], d[i + 2] - bg[2]];
-          let best = null, bestErr = Infinity, bestA = 0;
-          for (const k in RGB) {
-            const v = [RGB[k][0] - bg[0], RGB[k][1] - bg[1], RGB[k][2] - bg[2]];
-            const vv = v[0] * v[0] + v[1] * v[1] + v[2] * v[2] || 1;
-            const a = Math.max(0, Math.min(1, (px[0] * v[0] + px[1] * v[1] + px[2] * v[2]) / vv));
-            const err = (px[0] - a * v[0]) ** 2 + (px[1] - a * v[1]) ** 2 + (px[2] - a * v[2]) ** 2;
-            if (err < bestErr) { bestErr = err; best = k; bestA = a; }
-          }
-          cells[yy][xx] = bestA < 0.5 ? null : best;
-        }
-      }
-    }
+  const c = document.createElement('canvas'); c.width = N; c.height = N;
+  const x = c.getContext('2d');
+  x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+  const s = Math.min(N / img.width, N / img.height), w = img.width * s, h = img.height * s;
+  x.drawImage(img, (N - w) / 2, (N - h) / 2, w, h);
+  const d = x.getImageData(0, 0, N, N).data;
+  // background = average of the original image's corners (if they're opaque)
+  let bg = null;
+  if ($('bgRemove').checked) {
+    const full = document.createElement('canvas'); full.width = img.width; full.height = img.height;
+    const fx = full.getContext('2d'); fx.drawImage(img, 0, 0);
+    const cs = [[0, 0], [img.width - 1, 0], [0, img.height - 1], [img.width - 1, img.height - 1]].map(([a, b]) => fx.getImageData(a, b, 1, 1).data);
+    // only treat it as a background if all four corners are opaque and roughly the same color
+    // (photos with a gradient sky or scenery edge-to-edge have no plain background)
+    const same = cs.every(a => cs.every(b => cdist([a[0], a[1], a[2]], [b[0], b[1], b[2]]) < 4000));
+    if (cs.every(p => p[3] >= 128) && same) bg = [0, 1, 2].map(k => cs.reduce((t, p) => t + p[k], 0) / 4);
   }
+  const classify = (i, keys) => {
+    if (d[i + 3] < 128) return null;
+    const px = [d[i], d[i + 1], d[i + 2]];
+    if (!bg) return nearest(px, keys);
+    const fg = keys.filter(k => cdist(RGB[k], bg) > 6000); // colors too close to the background count as background
+    return fg.length ? unmix(px, fg, bg) : null;
+  };
+  // pass 1: which game colors does the image use most? keep the top N ("Colors to use")
+  const freq = {};
+  for (let i = 0; i < N * N * 4; i += 4) { const k = classify(i, KEYS); if (k) freq[k] = (freq[k] || 0) + 1; }
+  let keys = Object.keys(freq).sort((a, b) => freq[b] - freq[a]).slice(0, +$('maxColors').value);
+  if (!keys.length) keys = KEYS;
+  // pass 2: map every pixel to the chosen colors
+  cells = blank(N);
+  for (let yy = 0; yy < N; yy++) for (let xx = 0; xx < N; xx++) cells[yy][xx] = classify((yy * N + xx) * 4, keys);
 }
 
 // ---------- stats / export ----------
-function level() { return { id: slug($('name').value), name: $('name').value.trim() || 'Untitled', rows: rows() }; }
+function level() {
+  const lv = { id: slug($('name').value), name: $('name').value.trim() || 'Untitled', rows: rows() };
+  if ($('sandMode').checked) lv.sand = true;
+  return lv;
+}
 function changed(nameOnly) {
   if (!nameOnly) draw();
   const lv = level();
-  const count = { R: 0, B: 0, Y: 0, G: 0 };
-  for (const r of cells) for (const c of r) if (c) count[c]++;
+  const count = {};
+  for (const r of cells) for (const c of r) if (c) count[c] = (count[c] || 0) + 1;
   const total = Object.values(count).reduce((a, b) => a + b, 0);
   let visible = 0;
   if (total) {
@@ -315,14 +329,16 @@ function changed(nameOnly) {
   }
   $('stats').innerHTML =
     Object.keys(count).map(k => `<div><span class="dot" style="background:${COL[k]}"></span>${NAMES[k]} <b>${count[k]}</b></div>`).join('') +
-    `<div>Total pixels <b>${total}</b></div><div>Hittable at start <b>${visible}</b></div>`;
+    `<div>Total pixels <b>${total}</b></div><div>Hittable at start <b>${visible}</b></div>` +
+    `<div>Colors used <b>${Object.keys(count).length}</b></div><div>Shots per block <b>×${total ? PBCore.autoAmmoPerBlock(lv) : 1}</b></div>`;
   const warns = [];
   if (!total) warns.push('Paint at least one pixel.');
-  if (total > 140) warns.push('Very large picture: expect a long level.');
-  const used = Object.values(count).filter(Boolean).length;
+  if (total > 300) warns.push(`Big picture: each cleared block gives ${PBCore.autoAmmoPerBlock(lv)} shots so the level stays a reasonable length.`);
+  const used = Object.keys(count).length;
+  if (used > 6) warns.push(`${used} colors: blocks spread across many colors, so lines clear into smaller shooters. 4–6 colors plays best.`);
   if (used === 1 && total > 20) warns.push('Only one color: blocks will all be that color, so it plays very easily.');
   $('warn').textContent = warns.join(' ');
-  $('out').value = `{ id: '${lv.id}', name: '${lv.name.replace(/'/g, "\\'")}', rows: [\n${lv.rows.map(r => `  '${r}',`).join('\n')}\n] },`;
+  $('out').value = `{ id: '${lv.id}', name: '${lv.name.replace(/'/g, "\\'")}', ${lv.sand ? 'sand: true, ' : ''}rows: [\n${lv.rows.map(r => `  '${r}',`).join('\n')}\n] },`;
   $('simOut').innerHTML = '';
   try { localStorage.setItem('pb-editor-draft', JSON.stringify(lv)); } catch (_) {}
 }
@@ -331,9 +347,10 @@ function changed(nameOnly) {
 $('sim').onclick = () => {
   const lv = level();
   if (!lv.rows.join('').replace(/\./g, '').length) return;
-  $('simOut').textContent = 'Running 40 games…';
+  const px = lv.rows.join('').replace(/\./g, '').length, runs = px > 300 ? 12 : px > 150 ? 24 : 40;
+  $('simOut').textContent = `Running ${runs} games…`;
   setTimeout(() => {
-    const r = PBBot.evaluate(lv, 40, { thinkTime: 1.2 });
+    const r = PBBot.evaluate(lv, runs, { thinkTime: 1.2 });
     const w = r.winRate;
     const [label, color] = w >= 0.8 ? ['Easy', '#86efac'] : w >= 0.55 ? ['Medium', '#fde68a'] : w >= 0.3 ? ['Hard', '#fdba74'] : ['Very hard', '#fca5a5'];
     $('simOut').innerHTML =
@@ -357,7 +374,7 @@ $('copy').onclick = async () => {
 // ---------- start ----------
 try {
   const d = JSON.parse(localStorage.getItem('pb-editor-draft') || 'null');
-  if (d && d.rows) { N = d.rows.length; cells = d.rows.map(r => [...r].map(c => c === '.' ? null : c)); $('name').value = d.name; }
+  if (d && d.rows) { N = d.rows.length; cells = d.rows.map(r => [...r].map(c => c === '.' ? null : c)); $('name').value = d.name; $('sandMode').checked = !!d.sand; }
 } catch (_) {}
 $('size').value = N;
 requestAnimationFrame(() => changed());

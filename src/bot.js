@@ -22,14 +22,14 @@
       const add = (x, y) => { const k = y * BN + x; if (!seen.has(k)) { seen.add(k); counts[b[y][x]] = (counts[b[y][x]] || 0) + 1; } };
       for (const y of rows) for (let x = 0; x < BN; x++) add(x, y);
       for (const x of cols) for (let y = 0; y < BN; y++) add(x, y);
-      const mult = n >= 2 ? game.cfg.comboMult : 1;
+      const mult = (n >= 2 ? game.cfg.comboMult : 1) * game.ammoPerBlock;
       const queueRoom = game.cfg.queueSize - game.queue.length;
       let shooters = 0;
       for (const c in counts) {
         const shots = counts[c] * mult;
-        const useful = Math.min(shots, Math.max(0, need[c]));
-        value += useful * 3 + shots * 0.3;
-        shooters++;
+        const useful = Math.min(shots, Math.max(0, need[c] || 0));
+        value += (useful * 3 + shots * 0.3) / game.ammoPerBlock;
+        if (!(game.cfg.mergeQueue && game.queue.some(s => s.color === c))) shooters++;
       }
       if (shooters > queueRoom) value -= (shooters - queueRoom) * 15; // shots would be lost
       for (const k of seen) b[(k / BN) | 0][k % BN] = null;
@@ -60,7 +60,8 @@
   function chooseMove(game) {
     const r = game.remaining(), pend = game.pendingAmmo();
     const need = {};
-    for (const c of ['R', 'B', 'Y', 'G']) need[c] = r[c] - pend[c] - pend.W / 4;
+    const rainbowShare = (pend['*'] || 0) / Math.max(1, game.colors.length);
+    for (const c of game.colors) need[c] = (r[c] || 0) - (pend[c] || 0) - rainbowShare;
     let best = null;
     for (let i = 0; i < 3; i++) {
       const p = game.tray[i];
@@ -79,7 +80,7 @@
     const exposed = game.exposedColors();
     let best = -1, bestAmmo = -1;
     game.queue.forEach((s, i) => {
-      if ((s.color === 'W' || exposed.has(s.color)) && s.ammo > bestAmmo) { best = i; bestAmmo = s.ammo; }
+      if ((s.color === '*' || exposed.has(s.color)) && s.ammo > bestAmmo) { best = i; bestAmmo = s.ammo; }
     });
     if (best >= 0) return best;
     // nothing hittable right now: cycle the biggest shooter only when the queue is nearly full
