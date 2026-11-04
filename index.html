@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Pixel Blast — prototype</title>
+<style>
+  html,body{margin:0;height:100%;background:#12141a;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
+  body{display:flex;align-items:center;justify-content:center}
+  canvas{display:block;touch-action:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(() => {
+'use strict';
+// ---------- canvas / scaling ----------
+const W = 400, H = 780;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let scale = 1, dpr = 1;
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+  cv.style.width = (W * scale) + 'px';
+  cv.style.height = (H * scale) + 'px';
+  cv.width = Math.round(W * scale * dpr);
+  cv.height = Math.round(H * scale * dpr);
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ---------- data ----------
+const COL = { R: '#ef4444', B: '#3b82f6', Y: '#facc15', G: '#22c55e', W: '#f8fafc' };
+const KEYS = ['R', 'B', 'Y', 'G'];
+const PICS = [
+  { name: 'Heart', rows: [
+    '.RR....RR.',
+    'RRRR..RRRR',
+    'RYRRRRRRRR',
+    'RYRRRRRRRR',
+    'RRRRRRRRRR',
+    '.RRRRRRRR.',
+    '..RRRRRR..',
+    '...RRRR...',
+    '....RR....',
+    '..........'] },
+  { name: 'Smiley', rows: [
+    '...YYYY...',
+    '.YYYYYYYY.',
+    'YYYBYYBYYY',
+    'YYYBYYBYYY',
+    'YYYYYYYYYY',
+    'YRYYYYYYRY',
+    'YYRYYYYRYY',
+    '.YYRRRRYY.',
+    '..YYYYYY..',
+    '....YY....'] },
+  { name: 'Fish', rows: [
+    '..........',
+    '....BBB...',
+    '..BBBBBB.Y',
+    '.BBYBBBBYY',
+    'BBBBBBBBYY',
+    'BBRRBBBBYY',
+    '.BRRBBBB.Y',
+    '..BBBBBB..',
+    '....BBB...',
+    'G.G....G.G'] },
+  { name: 'Tree', rows: [
+    '...GGGG...',
+    '..GGGGGG..',
+    '.GGRGGGGG.',
+    '.GGGGGRGG.',
+    'GGRGGGGGGG',
+    '.GGGGGGRG.',
+    '..GGGGGG..',
+    '....YY....',
+    '....YY....',
+    'BBBBYYBBBB'] },
+  { name: 'Landscape', rows: [
+    'BBBBBBBYYB',
+    'BBBBBBYYYY',
+    'BBBBBBBYYB',
+    'BBBBRBBBBB',
+    'BBBRRRBBBB',
+    'BBRRRRRBBG',
+    'GBBRYRBBGG',
+    'GGGRYRGGGG',
+    'GGGGGGGGGG',
+    'GGGGGGGGGG'] },
+];
+const SHAPES = [
+  [[0,0]],
+  [[0,0],[1,0]], [[0,0],[0,1]],
+  [[0,0],[1,0],[2,0]], [[0,0],[0,1],[0,2]],
+  [[0,0],[1,0],[2,0],[3,0]], [[0,0],[0,1],[0,2],[0,3]],
+  [[0,0],[1,0],[2,0],[3,0],[4,0]], [[0,0],[0,1],[0,2],[0,3],[0,4]],
+  [[0,0],[1,0],[0,1],[1,1]],
+  [[0,0],[1,0],[2,0],[0,1],[1,1],[2,1],[0,2],[1,2],[2,2]],
+  [[0,0],[0,1],[1,1]], [[0,0],[1,0],[0,1]], [[0,0],[1,0],[1,1]], [[1,0],[0,1],[1,1]],
+  [[0,0],[0,1],[0,2],[1,2]], [[0,0],[1,0],[2,0],[0,1]], [[0,0],[1,0],[1,1],[1,2]], [[2,0],[0,1],[1,1],[2,1]],
+  [[0,0],[1,0],[2,0],[1,1]], [[1,0],[0,1],[1,1],[2,1]],
+  [[1,0],[2,0],[0,1],[1,1]], [[0,0],[1,0],[1,1],[2,1]],
+];
+
+// ---------- layout ----------
+const N = 10, PC = 22, BELT = 24;
+const PIC_X = (W - N * PC) / 2, PIC_Y = 58 + BELT;
+const QN = 6, QW = 52, QG = 8, QH = 42, QY = 344, QX = (W - (QN * QW + (QN - 1) * QG)) / 2;
+const BN = 8, BC = 34, BX = (W - BN * BC) / 2, BY = 398;
+const TRAY_Y = 680, TRAY_CELL = 20;
+const BELT_CAP = 5, SPEED = 7, LAP = 4 * N;
+
+// ---------- state ----------
+let mode = 'menu', endless = false, picIndex = 0, picName = '';
+let pic, belt, queue, board, tray, score, lines, picsDone;
+let effects = [], projs = [], toasts = [], drag = null, buttons = [], time = 0;
+
+// ---------- meta (saved per browser) ----------
+let coins = 60, streak = 0, album = new Set(), result = null;
+const COST = { rainbow: 30, shuffle: 20 };
+try {
+  const s = JSON.parse(localStorage.getItem('pixelblast-meta') || 'null');
+  if (s) { coins = s.coins; streak = s.streak; album = new Set(s.album); }
+} catch (_) {}
+function saveMeta() {
+  try { localStorage.setItem('pixelblast-meta', JSON.stringify({ coins, streak, album: [...album] })); } catch (_) {}
+}
+const streakMult = s => 1 + 0.5 * Math.min(Math.max(s - 1, 0), 4); // win 1 = x1 ... win 5+ = x3
+function useBooster(kind) {
+  if (mode !== 'play') return;
+  if (coins < COST[kind]) { toast(`Need ${COST[kind]} coins`, '#fca5a5'); return; }
+  if (kind === 'rainbow') {
+    if (queue.length >= QN) { toast('Queue is full', '#fca5a5'); return; }
+    queue.push({ color: 'W', ammo: 8 });
+    toast('Rainbow shooter: hits any color', '#f8fafc');
+  } else {
+    refillTray();
+    toast('Tray shuffled', '#f8fafc');
+  }
+  coins -= COST[kind];
+  saveMeta();
+}
+
+function loadPic(idx) {
+  picIndex = idx;
+  picName = PICS[idx].name;
+  pic = PICS[idx].rows.map(r => [...r].map(ch => ch === '.' ? null : ch));
+}
+function start(idx, isEndless) {
+  endless = isEndless;
+  score = 0; lines = 0; picsDone = 0;
+  belt = []; queue = []; effects = []; projs = []; toasts = []; drag = null;
+  loadPic(isEndless ? Math.floor(Math.random() * PICS.length) : idx);
+  board = Array.from({ length: BN }, () => Array(BN).fill(null));
+  tray = [null, null, null];
+  refillTray();
+  mode = 'play';
+}
+function countPixels() { let n = 0; for (const r of pic) for (const c of r) if (c) n++; return n; }
+function remaining() {
+  const r = { R: 0, B: 0, Y: 0, G: 0 };
+  for (const row of pic) for (const c of row) if (c) r[c]++;
+  return r;
+}
+function pendingAmmo() {
+  const p = { R: 0, B: 0, Y: 0, G: 0, W: 0 };
+  for (const s of queue) p[s.color] += s.ammo;
+  for (const s of belt) p[s.color] += s.ammo;
+  return p;
+}
+function pickColor() {
+  const r = remaining(), p = pendingAmmo();
+  let tot = 0;
+  const w = KEYS.map(k => {
+    const need = Math.max(0, r[k] - p[k]);
+    const v = need > 0 ? need + 4 : (r[k] > 0 ? 3 : 0);
+    tot += v; return v;
+  });
+  if (tot === 0) return KEYS[Math.floor(Math.random() * 4)];
+  let x = Math.random() * tot;
+  for (let i = 0; i < 4; i++) { x -= w[i]; if (x < 0) return KEYS[i]; }
+  return KEYS[3];
+}
+
+// ---------- block board ----------
+function fits(sh, gx, gy) {
+  for (const [x, y] of sh) {
+    const X = gx + x, Y = gy + y;
+    if (X < 0 || Y < 0 || X >= BN || Y >= BN || board[Y][X]) return false;
+  }
+  return true;
+}
+function canPlaceAnywhere(sh) {
+  for (let y = 0; y < BN; y++) for (let x = 0; x < BN; x++) if (fits(sh, x, y)) return true;
+  return false;
+}
+function newPiece() {
+  const sh = SHAPES[Math.floor(Math.random() * SHAPES.length)];
+  return { sh, color: pickColor(), w: Math.max(...sh.map(c => c[0])) + 1, h: Math.max(...sh.map(c => c[1])) + 1 };
+}
+function refillTray() {
+  for (let a = 0; a < 30; a++) {
+    tray = [newPiece(), newPiece(), newPiece()];
+    if (tray.some(p => canPlaceAnywhere(p.sh))) return;
+  }
+}
+function fullLines(b) {
+  const rows = [], cols = [];
+  for (let y = 0; y < BN; y++) if (b[y].every(c => c)) rows.push(y);
+  for (let x = 0; x < BN; x++) {
+    let f = true;
+    for (let y = 0; y < BN; y++) if (!b[y][x]) { f = false; break; }
+    if (f) cols.push(x);
+  }
+  return { rows, cols };
+}
+function placePiece(i, gx, gy) {
+  const p = tray[i];
+  for (const [x, y] of p.sh) board[gy + y][gx + x] = p.color;
+  score += p.sh.length;
+  tray[i] = null;
+  resolveLines();
+  if (tray.every(t => !t)) refillTray();
+  checkOver();
+}
+function resolveLines() {
+  const { rows, cols } = fullLines(board);
+  const n = rows.length + cols.length;
+  if (!n) return;
+  const cells = new Set(), counts = { R: 0, B: 0, Y: 0, G: 0 }, bonus = { R: 0, B: 0, Y: 0, G: 0 };
+  const add = (x, y) => { const k = y * BN + x; if (!cells.has(k)) { cells.add(k); counts[board[y][x]]++; } };
+  let mono = 0;
+  for (const y of rows) {
+    for (let x = 0; x < BN; x++) add(x, y);
+    const c0 = board[y][0];
+    if (board[y].every(c => c === c0)) { bonus[c0] += 4; mono++; }
+  }
+  for (const x of cols) {
+    for (let y = 0; y < BN; y++) add(x, y);
+    const c0 = board[0][x];
+    let m = true;
+    for (let y = 0; y < BN; y++) if (board[y][x] !== c0) m = false;
+    if (m) { bonus[c0] += 4; mono++; }
+  }
+  const mult = n >= 2 ? 1.5 : 1;
+  for (const k of cells) {
+    const x = k % BN, y = (k / BN) | 0;
+    effects.push({ type: 'cell', x: BX + x * BC, y: BY + y * BC, color: board[y][x], t: 0 });
+    board[y][x] = null;
+  }
+  lines += n;
+  score += 10 * n * n;
+  const made = [];
+  for (const c of KEYS) {
+    const ammo = Math.ceil(counts[c] * mult) + bonus[c];
+    if (ammo > 0) made.push({ color: c, ammo });
+  }
+  made.sort((a, b) => b.ammo - a.ammo);
+  let lost = 0;
+  for (const s of made) { if (queue.length < QN) queue.push(s); else lost += s.ammo; }
+  if (n >= 2) toast(`Combo ×${n}! Ammo ×1.5`, '#fde68a');
+  if (mono) toast(`Single-color line! +${4 * mono} bonus shots`, '#a7f3d0');
+  if (lost) toast(`Queue full — ${lost} shots lost`, '#fca5a5');
+}
+function checkOver() {
+  const left = tray.filter(t => t);
+  if (left.length && !left.some(p => canPlaceAnywhere(p.sh))) {
+    mode = 'over';
+    drag = null;
+  }
+}
+function leaveRun() {
+  // a jammed board that wasn't continued ends the win streak
+  if (mode === 'over' && !endless && streak > 0) { streak = 0; saveMeta(); }
+}
+
+// ---------- belt / shooters ----------
+function slotXY(i) {
+  i = ((i % LAP) + LAP) % LAP;
+  const side = Math.floor(i / N), k = i % N, off = BELT / 2;
+  if (side === 0) return [PIC_X + k * PC + PC / 2, PIC_Y - off];
+  if (side === 1) return [PIC_X + N * PC + off, PIC_Y + k * PC + PC / 2];
+  if (side === 2) return [PIC_X + (N - 1 - k) * PC + PC / 2, PIC_Y + N * PC + off];
+  return [PIC_X - off, PIC_Y + (N - 1 - k) * PC + PC / 2];
+}
+function posXY(p) {
+  const a = Math.floor(p), f = p - a;
+  const [x1, y1] = slotXY(a), [x2, y2] = slotXY(a + 1);
+  return [x1 + (x2 - x1) * f, y1 + (y2 - y1) * f];
+}
+function scanTarget(i) {
+  const side = Math.floor(i / N), k = i % N;
+  for (let s = 0; s < N; s++) {
+    let x, y;
+    if (side === 0) { x = k; y = s; }
+    else if (side === 1) { x = N - 1 - s; y = k; }
+    else if (side === 2) { x = N - 1 - k; y = N - 1 - s; }
+    else { x = s; y = N - 1 - k; }
+    if (pic[y][x]) return [x, y];
+  }
+  return null;
+}
+function tryFire(s, i) {
+  if (s.ammo <= 0) return;
+  const t = scanTarget(i);
+  if (!t) return;
+  const [x, y] = t;
+  if (s.color !== 'W' && pic[y][x] !== s.color) return;
+  const pcolor = pic[y][x];
+  pic[y][x] = null;
+  s.ammo--;
+  score += 5;
+  const [sx, sy] = slotXY(i);
+  projs.push({ sx, sy, tx: PIC_X + x * PC + PC / 2, ty: PIC_Y + y * PC + PC / 2, px: x, py: y, color: s.color, pcolor, t: 0 });
+}
+function launch(i) {
+  if (i >= queue.length) return;
+  if (belt.length >= BELT_CAP) { toast('Belt is full', '#fca5a5'); return; }
+  if (belt.some(s => s.pos < 1.3)) { toast('Wait for a gap on the belt', '#fca5a5'); return; }
+  const s = queue.splice(i, 1)[0];
+  belt.push({ color: s.color, ammo: s.ammo, pos: 0, last: -1 });
+}
+
+// ---------- update ----------
+function update(dt) {
+  for (const s of belt) {
+    s.pos += SPEED * dt;
+    const slot = Math.min(Math.floor(s.pos), LAP - 1);
+    while (s.last < slot) { s.last++; tryFire(s, s.last); }
+  }
+  for (let i = belt.length - 1; i >= 0; i--) {
+    const s = belt[i];
+    if (s.ammo <= 0) {
+      const [x, y] = posXY(s.pos);
+      effects.push({ type: 'poof', x, y, color: s.color, t: 0 });
+      belt.splice(i, 1);
+    } else if (s.pos >= LAP) {
+      belt.splice(i, 1);
+      if (queue.length < QN) { queue.push({ color: s.color, ammo: s.ammo }); toast('Unused shooter returned to queue', '#cbd5e1'); }
+      else toast(`Queue full — ${s.ammo} shots lost`, '#fca5a5');
+    }
+  }
+  if (countPixels() === 0 && projs.length === 0) {
+    if (endless) {
+      picsDone++;
+      score += 200;
+      coins += 10;
+      album.add(picName);
+      saveMeta();
+      toast('Picture cleared! +10 coins — next one', '#fde68a');
+      let n;
+      do { n = Math.floor(Math.random() * PICS.length); } while (PICS.length > 1 && n === picIndex);
+      loadPic(n);
+    } else {
+      mode = 'win';
+      drag = null;
+      streak++;
+      const mult = streakMult(streak);
+      const reward = Math.round(20 * mult);
+      const isNew = !album.has(picName);
+      coins += reward;
+      album.add(picName);
+      saveMeta();
+      result = { reward, mult, isNew };
+    }
+  }
+}
+function updateFx(dt) {
+  for (let i = projs.length - 1; i >= 0; i--) {
+    const p = projs[i];
+    p.t += dt / 0.14;
+    if (p.t >= 1) {
+      effects.push({ type: 'pix', x: PIC_X + p.px * PC, y: PIC_Y + p.py * PC, color: p.pcolor, t: 0 });
+      projs.splice(i, 1);
+    }
+  }
+  for (let i = effects.length - 1; i >= 0; i--) { effects[i].t += dt; if (effects[i].t > 0.4) effects.splice(i, 1); }
+  for (let i = toasts.length - 1; i >= 0; i--) { toasts[i].t += dt; if (toasts[i].t > 1.8) toasts.splice(i, 1); }
+}
+function toast(text, color) {
+  toasts.push({ text, color: color || '#fff', t: 0 });
+  if (toasts.length > 3) toasts.shift();
+}
+
+// ---------- drawing helpers ----------
+function rr(x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+function block(x, y, s, c, alpha = 1) {
+  ctx.globalAlpha = alpha;
+  rr(x + 1, y + 1, s - 2, s - 2, Math.min(6, s * 0.2));
+  ctx.fillStyle = COL[c];
+  ctx.fill();
+  ctx.fillStyle = 'rgba(255,255,255,.22)';
+  rr(x + 3, y + 3, s - 6, Math.max(2, (s - 6) * 0.32), Math.min(3, s * 0.1));
+  ctx.fill();
+  ctx.globalAlpha = 1;
+}
+function text(t, x, y, size, color, align = 'center', weight = '600') {
+  ctx.font = `${weight} ${size}px system-ui,-apple-system,Segoe UI,Roboto,sans-serif`;
+  ctx.fillStyle = color;
+  ctx.textAlign = align;
+  ctx.textBaseline = 'middle';
+  ctx.fillText(t, x, y);
+}
+function shooter(x, y, r, c, ammo) {
+  if (c === 'W') {
+    KEYS.forEach((k, i) => {
+      ctx.beginPath(); ctx.moveTo(x, y);
+      ctx.arc(x, y, r, i * Math.PI / 2 + time * 3, (i + 1) * Math.PI / 2 + time * 3);
+      ctx.closePath(); ctx.fillStyle = COL[k]; ctx.fill();
+    });
+    ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, Math.PI * 2); ctx.fillStyle = 'rgba(15,17,22,.75)'; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.stroke();
+    text(String(ammo), x, y + 0.5, r * 0.95, '#fff', 'center', '800');
+    return;
+  }
+  ctx.beginPath();
+  ctx.arc(x, y, r, 0, Math.PI * 2);
+  ctx.fillStyle = COL[c];
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = 'rgba(255,255,255,.85)';
+  ctx.stroke();
+  text(String(ammo), x, y + 0.5, r * 0.95, c === 'Y' ? '#3b2f00' : '#fff', 'center', '800');
+}
+function button(label, x, y, w, h, fn, primary) {
+  rr(x, y, w, h, 12);
+  ctx.fillStyle = primary ? '#f8fafc' : '#262a35';
+  ctx.fill();
+  text(label, x + w / 2, y + h / 2, 17, primary ? '#111827' : '#f1f5f9', 'center', '700');
+  buttons.push({ x, y, w, h, fn });
+}
+
+// ---------- render ----------
+function render() {
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+  buttons = [];
+  ctx.fillStyle = '#12141a';
+  ctx.fillRect(0, 0, W, H);
+  if (mode === 'menu') { drawMenu(); return; }
+
+  // HUD
+  text(endless ? `Endless · ${picName}` : picName, 16, 26, 17, '#f1f5f9', 'left', '700');
+  text(`${countPixels()} px left`, W / 2 + 18, 26, 14, '#94a3b8');
+  text(`${score}`, W - 52, 26, 17, '#fde68a', 'right', '800');
+  rr(W - 42, 12, 30, 28, 8); ctx.fillStyle = '#262a35'; ctx.fill();
+  text('☰', W - 27, 26, 16, '#e2e8f0');
+  buttons.push({ x: W - 42, y: 12, w: 30, h: 28, fn: () => { mode = 'menu'; drag = null; } });
+
+  // belt track
+  const bx = PIC_X - BELT, by = PIC_Y - BELT, bw = N * PC + 2 * BELT, bh = N * PC + 2 * BELT;
+  rr(bx, by, bw, bh, 14); ctx.fillStyle = '#232733'; ctx.fill();
+  ctx.save();
+  ctx.setLineDash([4, 8]);
+  ctx.lineDashOffset = -time * SPEED * PC * 0.6;
+  ctx.strokeStyle = 'rgba(255,255,255,.12)';
+  ctx.lineWidth = 2;
+  rr(bx + BELT / 2, by + BELT / 2, bw - BELT, bh - BELT, 8);
+  ctx.stroke();
+  ctx.restore();
+  // start marker
+  const [mx, my] = slotXY(0);
+  ctx.fillStyle = 'rgba(255,255,255,.35)';
+  ctx.beginPath(); ctx.moveTo(mx - 14, my - 5); ctx.lineTo(mx - 8, my); ctx.lineTo(mx - 14, my + 5); ctx.fill();
+
+  // picture
+  ctx.fillStyle = '#181b23';
+  ctx.fillRect(PIC_X, PIC_Y, N * PC, N * PC);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) if (pic[y][x]) block(PIC_X + x * PC, PIC_Y + y * PC, PC, pic[y][x]);
+  for (const p of projs) block(PIC_X + p.px * PC, PIC_Y + p.py * PC, PC, p.pcolor, 0.85);
+  for (const e of effects) {
+    const k = e.t / 0.4;
+    if (e.type === 'pix') {
+      const s = PC * (1 + k * 0.8);
+      block(e.x + PC / 2 - s / 2, e.y + PC / 2 - s / 2, s, e.color, 1 - k);
+    } else if (e.type === 'poof') {
+      ctx.globalAlpha = 1 - k;
+      ctx.beginPath(); ctx.arc(e.x, e.y, 10 + k * 14, 0, Math.PI * 2);
+      ctx.strokeStyle = COL[e.color]; ctx.lineWidth = 3; ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+  }
+  for (const p of projs) {
+    const x = p.sx + (p.tx - p.sx) * p.t, y = p.sy + (p.ty - p.sy) * p.t;
+    ctx.beginPath(); ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = '#fff'; ctx.fill();
+    ctx.beginPath(); ctx.arc(x, y, 2.5, 0, Math.PI * 2);
+    ctx.fillStyle = COL[p.color]; ctx.fill();
+  }
+  for (const s of belt) { const [x, y] = posXY(s.pos); shooter(x, y, 10, s.color, s.ammo); }
+
+  // left column: coins + streak
+  drawCoin(33, 104, 11);
+  text(String(coins), 33, 128, 15, '#fde68a', 'center', '800');
+  text('STREAK', 33, 168, 9, '#64748b', 'center', '800');
+  text(`${streak}`, 33, 188, 18, streak > 0 ? '#fb923c' : '#475569', 'center', '800');
+  text(`next ×${streakMult(streak + 1).toFixed(1)}`, 33, 208, 9, '#94a3b8', 'center', '700');
+  // right column: boosters
+  drawBooster('rainbow', 340, 88);
+  drawBooster('shuffle', 340, 168);
+
+  // queue
+  text(`TAP A SHOOTER TO LAUNCH  ·  BELT ${belt.length}/${BELT_CAP}`, W / 2, 335, 10, '#64748b', 'center', '700');
+  for (let i = 0; i < QN; i++) {
+    const x = QX + i * (QW + QG);
+    rr(x, QY, QW, QH, 10);
+    ctx.fillStyle = i < queue.length ? '#262a35' : '#1a1d25';
+    ctx.fill();
+    if (i < queue.length) shooter(x + QW / 2, QY + QH / 2, 15, queue[i].color, queue[i].ammo);
+  }
+
+  // board
+  rr(BX - 6, BY - 6, BN * BC + 12, BN * BC + 12, 12);
+  ctx.fillStyle = '#1a1d25'; ctx.fill();
+  let preview = null;
+  if (drag && mode === 'play') preview = dragGeom();
+  let clearSet = null;
+  if (preview && preview.ok) {
+    const tmp = board.map(r => r.slice());
+    for (const [x, y] of preview.p.sh) tmp[preview.gy + y][preview.gx + x] = preview.p.color;
+    const { rows, cols } = fullLines(tmp);
+    clearSet = new Set();
+    for (const y of rows) for (let x = 0; x < BN; x++) clearSet.add(y * BN + x);
+    for (const x of cols) for (let y = 0; y < BN; y++) clearSet.add(y * BN + x);
+  }
+  for (let y = 0; y < BN; y++) for (let x = 0; x < BN; x++) {
+    const px = BX + x * BC, py = BY + y * BC;
+    rr(px + 1, py + 1, BC - 2, BC - 2, 6);
+    ctx.fillStyle = '#232733'; ctx.fill();
+    if (board[y][x]) block(px, py, BC, board[y][x]);
+    if (clearSet && clearSet.has(y * BN + x)) {
+      rr(px + 1, py + 1, BC - 2, BC - 2, 6);
+      ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.fill();
+    }
+  }
+  if (preview && preview.ok) for (const [x, y] of preview.p.sh) block(BX + (preview.gx + x) * BC, BY + (preview.gy + y) * BC, BC, preview.p.color, 0.45);
+  for (const e of effects) if (e.type === 'cell') {
+    const k = e.t / 0.4, s = BC * (1 - k * 0.6);
+    block(e.x + BC / 2 - s / 2, e.y + BC / 2 - s / 2, s, e.color, 1 - k);
+  }
+
+  // tray
+  for (let i = 0; i < 3; i++) {
+    const p = tray[i];
+    if (!p || (drag && drag.i === i)) continue;
+    const cx = (i + 0.5) * (W / 3), cy = TRAY_Y + 50;
+    const ok = canPlaceAnywhere(p.sh);
+    const ox = cx - p.w * TRAY_CELL / 2, oy = cy - p.h * TRAY_CELL / 2;
+    for (const [x, y] of p.sh) block(ox + x * TRAY_CELL, oy + y * TRAY_CELL, TRAY_CELL, p.color, ok ? 1 : 0.3);
+  }
+  if (preview) for (const [x, y] of preview.p.sh) block(preview.gx0 + x * BC, preview.gy0 + y * BC, BC, preview.p.color, 0.95);
+
+  // toasts
+  toasts.forEach((t, i) => {
+    const a = t.t < 0.15 ? t.t / 0.15 : t.t > 1.4 ? Math.max(0, (1.8 - t.t) / 0.4) : 1;
+    ctx.globalAlpha = a;
+    const y = PIC_Y + N * PC / 2 - 26 + i * 30 - t.t * 6;
+    ctx.font = '700 14px system-ui,-apple-system,sans-serif';
+    const w = ctx.measureText(t.text).width + 24;
+    rr(W / 2 - w / 2, y - 13, w, 26, 13);
+    ctx.fillStyle = 'rgba(10,12,16,.88)'; ctx.fill();
+    text(t.text, W / 2, y, 14, t.color, 'center', '700');
+    ctx.globalAlpha = 1;
+  });
+
+  if (mode === 'win' || mode === 'over') drawEnd();
+}
+
+function drawCoin(x, y, r) {
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fillStyle = '#facc15'; ctx.fill();
+  ctx.beginPath(); ctx.arc(x, y, r * 0.62, 0, Math.PI * 2); ctx.strokeStyle = '#a16207'; ctx.lineWidth = 2; ctx.stroke();
+}
+function drawBooster(kind, x, y) {
+  const w = 54, h = 66, can = coins >= COST[kind];
+  rr(x, y, w, h, 10); ctx.fillStyle = '#262a35'; ctx.fill();
+  if (kind === 'rainbow') shooter(x + w / 2, y + 22, 12, 'W', 8);
+  else {
+    for (let i = 0; i < 3; i++) block(x + 9 + i * 12, y + 12 + (i % 2) * 6, 12, KEYS[i]);
+    ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(x + w / 2, y + 22, 16, -0.4, 2.4); ctx.stroke();
+  }
+  text(kind === 'rainbow' ? 'Rainbow' : 'Shuffle', x + w / 2, y + 44, 10, '#cbd5e1', 'center', '700');
+  drawCoin(x + 16, y + 57, 5);
+  text(String(COST[kind]), x + 32, y + 57, 11, can ? '#fde68a' : '#64748b', 'center', '800');
+  buttons.push({ x, y, w, h, fn: () => useBooster(kind) });
+}
+function drawThumb(idx, x, y, s, revealed) {
+  const rows = PICS[idx].rows, c = s / 10;
+  rr(x - 4, y - 4, s + 8, s + 8, 8); ctx.fillStyle = revealed ? '#1f2430' : '#1a1d25'; ctx.fill();
+  for (let yy = 0; yy < 10; yy++) for (let xx = 0; xx < 10; xx++) {
+    const ch = rows[yy][xx];
+    if (ch === '.') continue;
+    ctx.fillStyle = revealed ? COL[ch] : '#2c313d';
+    ctx.fillRect(x + xx * c, y + yy * c, c - 0.6, c - 0.6);
+  }
+  if (!revealed) text('?', x + s / 2, y + s / 2, 22, '#64748b', 'center', '800');
+}
+function drawMenu() {
+  text('Pixel Blast', W / 2, 62, 36, '#f8fafc', 'center', '800');
+  text('Pixel Flow × Block Blast — rough prototype', W / 2, 94, 13, '#94a3b8');
+  const lines = [
+    'Drag blocks onto the board. Fill rows or columns',
+    'to clear them.',
+    'Each cleared block becomes a shot of its color.',
+    'Tap a shooter in the queue to send it around the',
+    'belt. It hits the first pixel it can see — only if',
+    'the colors match.',
+    'Clear the picture to win. Jam the board and you lose.',
+  ];
+  lines.forEach((l, i) => text(l, W / 2, 126 + i * 18, 12.5, '#cbd5e1', 'center', '500'));
+  // album
+  text(`ALBUM  ${album.size}/${PICS.length}  ·  tap a picture to play it`, W / 2, 268, 11, '#94a3b8', 'center', '800');
+  const s = 56, gap = 18, x0 = (W - (PICS.length * s + (PICS.length - 1) * gap)) / 2;
+  PICS.forEach((p, i) => {
+    const x = x0 + i * (s + gap), y = 290;
+    drawThumb(i, x, y, s, album.has(p.name));
+    text(`${i + 1}. ${p.name}`, x + s / 2, y + s + 16, 10, album.has(p.name) ? '#e2e8f0' : '#64748b', 'center', '700');
+    buttons.push({ x: x - 4, y: y - 4, w: s + 8, h: s + 28, fn: () => start(i, false) });
+  });
+  // wallet + streak
+  rr(40, 400, W - 80, 64, 14); ctx.fillStyle = '#1a1d25'; ctx.fill();
+  drawCoin(84, 432, 12);
+  text(`${coins} coins`, 104, 432, 16, '#fde68a', 'left', '800');
+  text(`Streak ${streak}`, W - 64, 422, 15, streak > 0 ? '#fb923c' : '#94a3b8', 'right', '800');
+  text(`next win ×${streakMult(streak + 1).toFixed(1)} coins`, W - 64, 443, 11, '#94a3b8', 'right', '600');
+  text('Win levels in a row to raise the coin multiplier (up to ×3).', W / 2, 486, 11.5, '#94a3b8', 'center', '500');
+  text('Jamming the board resets it unless you shuffle to continue.', W / 2, 503, 11.5, '#94a3b8', 'center', '500');
+  const bw = 260, bx = (W - bw) / 2;
+  const nextIdx = Math.max(0, PICS.findIndex(p => !album.has(p.name)));
+  button(`Play next · ${PICS[nextIdx].name}`, bx, 540, bw, 54, () => start(nextIdx, false), true);
+  button('Endless', bx, 606, bw, 50, () => start(0, true), false);
+}
+
+function drawEnd() {
+  ctx.fillStyle = 'rgba(8,10,14,.82)';
+  ctx.fillRect(0, 0, W, H);
+  const win = mode === 'win';
+  const bw = 240, x = (W - bw) / 2;
+  if (win) {
+    text('Picture cleared!', W / 2, 150, 30, '#fde68a', 'center', '800');
+    drawThumb(picIndex, W / 2 - 45, 182, 90, true);
+    if (result.isNew) text('New picture added to your album!', W / 2, 300, 14, '#a7f3d0', 'center', '700');
+    drawCoin(W / 2 - 62, 334, 11);
+    text(`+${result.reward} coins`, W / 2 - 44, 334, 20, '#fde68a', 'left', '800');
+    text(`Streak ${streak}  ·  ×${result.mult.toFixed(1)} multiplier`, W / 2, 366, 14, '#fb923c', 'center', '700');
+    text(`Score ${score}  ·  Lines ${lines}`, W / 2, 392, 13, '#94a3b8');
+    const next = (picIndex + 1) % PICS.length;
+    button(`Next · ${PICS[next].name}`, x, 420, bw, 52, () => start(next, false), true);
+    button('Menu', x, 484, bw, 52, () => { mode = 'menu'; }, false);
+  } else {
+    text('Board jammed', W / 2, 220, 30, '#fca5a5', 'center', '800');
+    text(`Score ${score}  ·  Lines ${lines}${endless ? `  ·  Pictures ${picsDone}` : ''}`, W / 2, 258, 15, '#e2e8f0');
+    if (!endless && streak > 0) text(`Your ${streak}-win streak ends if you don't continue`, W / 2, 284, 13, '#fb923c', 'center', '700');
+    if (coins >= COST.shuffle) {
+      rr(x, 316, bw, 56, 12); ctx.fillStyle = '#fde68a'; ctx.fill();
+      text('Shuffle & continue', x + bw / 2 - 24, 344, 16, '#111827', 'center', '800');
+      drawCoin(x + bw - 46, 344, 9);
+      text(String(COST.shuffle), x + bw - 24, 344, 15, '#111827', 'center', '800');
+      buttons.push({ x, y: 316, w: bw, h: 56, fn: () => {
+        coins -= COST.shuffle; saveMeta(); mode = 'play'; refillTray(); checkOver();
+        toast('Tray shuffled — keep going!', '#fde68a');
+      } });
+    } else {
+      text(`Need ${COST.shuffle} coins to continue`, W / 2, 344, 13, '#64748b');
+    }
+    button('Retry', x, 386, bw, 52, () => { leaveRun(); start(picIndex, endless); }, false);
+    button('Menu', x, 450, bw, 52, () => { leaveRun(); mode = 'menu'; }, false);
+  }
+}
+
+// ---------- input ----------
+function pt(e) {
+  const r = cv.getBoundingClientRect();
+  return [(e.clientX - r.left) / scale, (e.clientY - r.top) / scale];
+}
+function dragGeom() {
+  const p = tray[drag.i];
+  const gx0 = drag.x - p.w * BC / 2, gy0 = drag.y - p.h * BC - (drag.touch ? 34 : 6);
+  const gx = Math.round((gx0 - BX) / BC), gy = Math.round((gy0 - BY) / BC);
+  return { p, gx0, gy0, gx, gy, ok: fits(p.sh, gx, gy) };
+}
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault();
+  const [x, y] = pt(e);
+  for (const b of buttons) if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.fn(); return; }
+  if (mode !== 'play') return;
+  for (let i = 0; i < QN; i++) {
+    const qx = QX + i * (QW + QG);
+    if (x >= qx && x <= qx + QW && y >= QY && y <= QY + QH) { launch(i); return; }
+  }
+  if (y >= TRAY_Y - 10) {
+    const i = Math.min(2, Math.max(0, Math.floor(x / (W / 3))));
+    if (tray[i]) {
+      drag = { i, x, y, touch: e.pointerType !== 'mouse' };
+      try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+  }
+});
+cv.addEventListener('pointermove', e => {
+  if (!drag) return;
+  const [x, y] = pt(e);
+  drag.x = x; drag.y = y;
+});
+function endDrag() {
+  if (!drag || mode !== 'play') { drag = null; return; }
+  const g = dragGeom();
+  const i = drag.i;
+  drag = null;
+  if (g.ok) placePiece(i, g.gx, g.gy);
+}
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', () => { drag = null; });
+
+// ---------- loop ----------
+let lastT = performance.now();
+function frame(t) {
+  const dt = Math.min(0.05, (t - lastT) / 1000);
+  lastT = t;
+  time += dt;
+  if (mode === 'play') update(dt);
+  updateFx(dt);
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// test hook (harmless in play)
+window.__pb = {
+  start, launch,
+  clearPic: () => { for (const r of pic) r.fill(null); },
+  state: () => ({ mode, coins, streak, album: [...album], score, lines, queue: queue && queue.length, belt: belt && belt.length, pixels: pic ? countPixels() : null }),
+  autoPlace: () => {
+    for (let i = 0; i < 3; i++) {
+      const p = tray[i];
+      if (!p) continue;
+      for (let y = 0; y < BN; y++) for (let x = 0; x < BN; x++) if (fits(p.sh, x, y)) { placePiece(i, x, y); return true; }
+    }
+    return false;
+  },
+};
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Node / build output (for the future Cocos/Capacitor port)
+node_modules/
+build/
+dist/
+temp/
+library/
+local/
+*.log
