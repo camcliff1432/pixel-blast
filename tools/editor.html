@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pixel Blast — Level Editor</title>
+<style>
+  :root{--bg:#12141a;--panel:#1a1d25;--panel2:#232733;--line:#2e3340;--text:#e2e8f0;--muted:#94a3b8;--accent:#fde68a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;border-bottom:1px solid var(--line)}
+  header h1{font-size:17px;margin:0}
+  header a{color:var(--muted);text-decoration:none;font-size:13px}
+  main{display:grid;grid-template-columns:minmax(280px,520px) minmax(280px,1fr);gap:18px;padding:18px;max-width:1100px;margin:0 auto}
+  @media (max-width:760px){main{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px}
+  #grid{width:100%;aspect-ratio:1;display:block;border-radius:8px;touch-action:none;cursor:crosshair;background:#181b23}
+  .gridnote{color:var(--muted);font-size:12px;margin-top:8px}
+  aside{display:flex;flex-direction:column;gap:12px}
+  h2{font-size:12px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+  label{display:flex;flex-direction:column;gap:4px;color:var(--muted);font-size:12px}
+  input[type=text],select,textarea{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px;font:inherit}
+  textarea{width:100%;height:150px;font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+  .row>label{flex:1;min-width:120px}
+  button{background:var(--panel2);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 12px;font:inherit;font-weight:600;cursor:pointer}
+  button:hover{border-color:#475569}
+  button.primary{background:var(--accent);color:#111827;border-color:var(--accent)}
+  button.on{outline:2px solid var(--accent);outline-offset:1px}
+  .swatch{width:38px;height:38px;border-radius:8px;padding:0}
+  .stats{display:grid;grid-template-columns:repeat(2,1fr);gap:6px 14px;font-size:13px}
+  .stats b{color:#fff}
+  .dot{display:inline-block;width:10px;height:10px;border-radius:3px;margin-right:6px;vertical-align:-1px}
+  .warn{color:#fca5a5;font-size:12px;margin-top:6px}
+  #simOut{font-size:13px;margin-top:8px}
+  .tag{display:inline-block;padding:2px 8px;border-radius:99px;font-weight:700;font-size:12px}
+  .check{flex-direction:row;align-items:center;gap:6px;color:var(--text);font-size:13px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Pixel Blast · Level Editor</h1>
+  <a href="../index.html">← Back to game</a>
+</header>
+<main>
+  <section class="card">
+    <canvas id="grid"></canvas>
+    <div class="gridnote">Click or drag to paint. Right-click (or the eraser) clears a pixel. Shooters see the picture from all four edges, so outer pixels must be cleared before inner ones.</div>
+  </section>
+  <aside>
+    <div class="card">
+      <h2>Level</h2>
+      <div class="row">
+        <label>Name <input type="text" id="name" value="My Level"></label>
+        <label>Size <select id="size"></select></label>
+        <label>Open existing <select id="preset"><option value="">—</option></select></label>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Paint</h2>
+      <div class="row" id="palette"></div>
+      <div class="row" style="margin-top:10px">
+        <button data-tool="brush" class="on">Brush</button>
+        <button data-tool="fill">Fill</button>
+        <button id="clear">Clear all</button>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Import image → pixels</h2>
+      <div class="row">
+        <label>Image <input type="file" id="file" accept="image/*"></label>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <label class="check"><input type="checkbox" id="bgRemove" checked> Make the background empty</label>
+      </div>
+      <div class="gridnote">The image is shrunk to the grid size and each pixel snaps to the nearest game color. Simple, high-contrast images work best.</div>
+    </div>
+    <div class="card">
+      <h2>Stats</h2>
+      <div class="stats" id="stats"></div>
+      <div id="warn" class="warn"></div>
+    </div>
+    <div class="card">
+      <h2>Difficulty check</h2>
+      <div class="row">
+        <button id="sim">Simulate 40 bot games</button>
+        <button id="play" class="primary">Play-test in game</button>
+      </div>
+      <div id="simOut"></div>
+    </div>
+    <div class="card">
+      <h2>Level code</h2>
+      <textarea id="out" readonly></textarea>
+      <div class="row" style="margin-top:8px">
+        <button id="copy">Copy</button>
+        <span class="gridnote" id="copyNote">Paste into src/levels.js</span>
+      </div>
+    </div>
+  </aside>
+</main>
+
+<script src="../src/core.js"></script>
+<script src="../src/levels.js"></script>
+<script src="../src/bot.js"></script>
+<script>
+(() => {
+'use strict';
+const COL = { R: '#ef4444', B: '#3b82f6', Y: '#facc15', G: '#22c55e' };
+const NAMES = { R: 'Red', B: 'Blue', Y: 'Yellow', G: 'Green' };
+const RGB = { R: [239, 68, 68], B: [59, 130, 246], Y: [250, 204, 21], G: [34, 197, 94] };
+const $ = id => document.getElementById(id);
+
+let N = 10, cells = blank(10), paint = 'R', tool = 'brush';
+
+function blank(n) { return Array.from({ length: n }, () => Array(n).fill(null)); }
+function rows() { return cells.map(r => r.map(c => c || '.').join('')); }
+function slug(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'level'; }
+
+// ---------- setup ----------
+for (let s = 8; s <= 16; s++) $('size').add(new Option(`${s} × ${s}`, s));
+PB_LEVELS.forEach((l, i) => $('preset').add(new Option(`${l.name} (${l.rows.length}×${l.rows.length})`, i)));
+for (const k of [...Object.keys(COL), null]) {
+  const b = document.createElement('button');
+  b.className = 'swatch' + (k === 'R' ? ' on' : '');
+  b.title = k ? NAMES[k] : 'Eraser';
+  b.style.background = k ? COL[k] : 'repeating-conic-gradient(#2e3340 0 25%, #1a1d25 0 50%) 0 0/12px 12px';
+  b.onclick = () => { paint = k; document.querySelectorAll('.swatch').forEach(x => x.classList.remove('on')); b.classList.add('on'); };
+  $('palette').appendChild(b);
+}
+document.querySelectorAll('[data-tool]').forEach(b => b.onclick = () => {
+  tool = b.dataset.tool;
+  document.querySelectorAll('[data-tool]').forEach(x => x.classList.toggle('on', x === b));
+});
+
+// ---------- grid canvas ----------
+const cv = $('grid'), ctx = cv.getContext('2d');
+function draw() {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.width * dpr);
+  const S = cv.width, c = S / N;
+  ctx.fillStyle = '#181b23'; ctx.fillRect(0, 0, S, S);
+  for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+    const v = cells[y][x];
+    if (v) {
+      ctx.fillStyle = COL[v];
+      ctx.beginPath(); ctx.roundRect(x * c + 1.5, y * c + 1.5, c - 3, c - 3, c * 0.18); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,.2)';
+      ctx.fillRect(x * c + c * 0.18, y * c + c * 0.16, c * 0.64, c * 0.16);
+    } else {
+      ctx.strokeStyle = '#262a35'; ctx.lineWidth = 1;
+      ctx.strokeRect(x * c + 0.5, y * c + 0.5, c - 1, c - 1);
+    }
+  }
+}
+function cellAt(e) {
+  const r = cv.getBoundingClientRect();
+  const x = Math.floor((e.clientX - r.left) / r.width * N), y = Math.floor((e.clientY - r.top) / r.height * N);
+  return x >= 0 && y >= 0 && x < N && y < N ? [x, y] : null;
+}
+function flood(x, y, to) {
+  const from = cells[y][x];
+  if (from === to) return;
+  const st = [[x, y]];
+  while (st.length) {
+    const [a, b] = st.pop();
+    if (a < 0 || b < 0 || a >= N || b >= N || cells[b][a] !== from) continue;
+    cells[b][a] = to;
+    st.push([a + 1, b], [a - 1, b], [a, b + 1], [a, b - 1]);
+  }
+}
+let painting; // undefined = not painting, null = erasing, 'R'.. = color
+cv.addEventListener('contextmenu', e => e.preventDefault());
+cv.addEventListener('pointerdown', e => {
+  const p = cellAt(e); if (!p) return;
+  const color = e.button === 2 ? null : paint;
+  if (tool === 'fill') { flood(p[0], p[1], color); changed(); return; }
+  painting = color; cells[p[1]][p[0]] = color; changed();
+  cv.setPointerCapture(e.pointerId);
+});
+cv.addEventListener('pointermove', e => {
+  if (painting === undefined) return;
+  if (!e.buttons) { painting = undefined; return; }
+  const p = cellAt(e); if (!p) return;
+  if (cells[p[1]][p[0]] !== painting) { cells[p[1]][p[0]] = painting; changed(); }
+});
+cv.addEventListener('pointerup', () => { painting = undefined; });
+window.addEventListener('resize', draw);
+
+// ---------- size / presets / clear ----------
+function setSize(n) {
+  const old = cells; N = n; cells = blank(n);
+  for (let y = 0; y < Math.min(n, old.length); y++) for (let x = 0; x < Math.min(n, old.length); x++) cells[y][x] = old[y][x];
+  $('size').value = n;
+}
+$('size').onchange = () => { setSize(+$('size').value); changed(); };
+$('preset').onchange = () => {
+  const l = PB_LEVELS[$('preset').value]; if (!l) return;
+  N = l.rows.length; $('size').value = N;
+  cells = l.rows.map(r => [...r].map(c => c === '.' ? null : c));
+  $('name').value = l.name; $('preset').value = ''; changed();
+};
+$('clear').onclick = () => { cells = blank(N); changed(); };
+$('name').oninput = () => changed(true);
+
+// ---------- image import ----------
+function nearest(r, g, b) {
+  let best = null, bd = Infinity;
+  for (const k in RGB) {
+    const [R, G, B] = RGB[k];
+    const d = 2 * (r - R) ** 2 + 4 * (g - G) ** 2 + 3 * (b - B) ** 2;
+    if (d < bd) { bd = d; best = k; }
+  }
+  return best;
+}
+$('file').onchange = () => {
+  const f = $('file').files[0]; if (!f) return;
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas'); c.width = N; c.height = N;
+    const x = c.getContext('2d');
+    x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
+    const s = Math.min(N / img.width, N / img.height), w = img.width * s, h = img.height * s;
+    x.drawImage(img, (N - w) / 2, (N - h) / 2, w, h);
+    const d = x.getImageData(0, 0, N, N).data;
+    cells = blank(N);
+    for (let yy = 0; yy < N; yy++) for (let xx = 0; xx < N; xx++) {
+      const i = (yy * N + xx) * 4;
+      cells[yy][xx] = d[i + 3] < 128 ? null : nearest(d[i], d[i + 1], d[i + 2]);
+    }
+    if ($('bgRemove').checked) {
+      // most common color on the border = background; clear it where it touches the edge
+      const count = {};
+      for (let k = 0; k < N; k++) for (const [a, b] of [[k, 0], [k, N - 1], [0, k], [N - 1, k]]) { const v = cells[b][a]; if (v) count[v] = (count[v] || 0) + 1; }
+      const bg = Object.keys(count).sort((a, b) => count[b] - count[a])[0];
+      if (bg && count[bg] > N) for (let k = 0; k < N; k++) for (const [a, b] of [[k, 0], [k, N - 1], [0, k], [N - 1, k]]) if (cells[b][a] === bg) flood(a, b, null);
+    }
+    URL.revokeObjectURL(img.src);
+    changed();
+  };
+  img.src = URL.createObjectURL(f);
+};
+
+// ---------- stats / export ----------
+function level() { return { id: slug($('name').value), name: $('name').value.trim() || 'Untitled', rows: rows() }; }
+function changed(nameOnly) {
+  if (!nameOnly) draw();
+  const lv = level();
+  const count = { R: 0, B: 0, Y: 0, G: 0 };
+  for (const r of cells) for (const c of r) if (c) count[c]++;
+  const total = Object.values(count).reduce((a, b) => a + b, 0);
+  let visible = 0;
+  if (total) {
+    const g = new PBCore.Game(lv, { seed: 1 }), seen = new Set();
+    for (let i = 0; i < g.lap; i++) { const t = g.scanTarget(i); if (t) seen.add(t.join()); }
+    visible = seen.size;
+  }
+  $('stats').innerHTML =
+    Object.keys(count).map(k => `<div><span class="dot" style="background:${COL[k]}"></span>${NAMES[k]} <b>${count[k]}</b></div>`).join('') +
+    `<div>Total pixels <b>${total}</b></div><div>Hittable at start <b>${visible}</b></div>`;
+  const warns = [];
+  if (!total) warns.push('Paint at least one pixel.');
+  if (total > 140) warns.push('Very large picture: expect a long level.');
+  const used = Object.values(count).filter(Boolean).length;
+  if (used === 1 && total > 20) warns.push('Only one color: blocks will all be that color, so it plays very easily.');
+  $('warn').textContent = warns.join(' ');
+  $('out').value = `{ id: '${lv.id}', name: '${lv.name.replace(/'/g, "\\'")}', rows: [\n${lv.rows.map(r => `  '${r}',`).join('\n')}\n] },`;
+  $('simOut').innerHTML = '';
+  try { localStorage.setItem('pb-editor-draft', JSON.stringify(lv)); } catch (_) {}
+}
+
+// ---------- difficulty sim ----------
+$('sim').onclick = () => {
+  const lv = level();
+  if (!lv.rows.join('').replace(/\./g, '').length) return;
+  $('simOut').textContent = 'Running 40 games…';
+  setTimeout(() => {
+    const r = PBBot.evaluate(lv, 40, { thinkTime: 1.2 });
+    const w = r.winRate;
+    const [label, color] = w >= 0.8 ? ['Easy', '#86efac'] : w >= 0.55 ? ['Medium', '#fde68a'] : w >= 0.3 ? ['Hard', '#fdba74'] : ['Very hard', '#fca5a5'];
+    $('simOut').innerHTML =
+      `<span class="tag" style="background:${color};color:#111">${label}</span> ` +
+      `Bot wins <b>${Math.round(w * 100)}%</b> first try · <b>${Math.round(r.winRateWithContinues * 100)}%</b> with up to 3 continues<br>` +
+      `Median clear time ${r.medianTime ? Math.round(r.medianTime) + 's' : '—'} · ${r.medianMoves || '—'} moves · avg progress ${Math.round(r.avgProgress * 100)}%`;
+  }, 30);
+};
+
+// ---------- play-test / copy ----------
+$('play').onclick = () => {
+  try { localStorage.setItem('pb-test-level', JSON.stringify(level())); } catch (_) {}
+  location.href = '../index.html#test';
+};
+$('copy').onclick = async () => {
+  $('out').select();
+  try { await navigator.clipboard.writeText($('out').value); $('copyNote').textContent = 'Copied!'; }
+  catch (_) { $('copyNote').textContent = 'Select the text above and copy it.'; }
+};
+
+// ---------- start ----------
+try {
+  const d = JSON.parse(localStorage.getItem('pb-editor-draft') || 'null');
+  if (d && d.rows) { N = d.rows.length; cells = d.rows.map(r => [...r].map(c => c === '.' ? null : c)); $('name').value = d.name; }
+} catch (_) {}
+$('size').value = N;
+requestAnimationFrame(() => changed());
+window.__ed = { state: () => ({ N, total: rows().join('').replace(/\./g, '').length }), level };
+})();
+</script>
+</body>
+</html>

@@ -6,33 +6,47 @@ Place blocks on an 8×8 board. Every cleared row or column turns its blocks into
 
 ## Play it
 
-Open `index.html` in any browser. It's a single file with no build step or install.
+Open `index.html` in a browser. There's no build step or install.
 
-- **Desktop:** drag pieces with the mouse, and click a queued shooter to launch it.
-- **Phone:** the same, by touch. It's built for a portrait screen.
+- Drag pieces onto the board; tap or click a queued shooter to launch it.
+- Built for a portrait phone screen; works with a mouse too.
 
-## What's in the prototype
+## Make levels
 
-- **Core loop:** each cleared block becomes one shot of its color. Clearing 2+ lines at once gives ×1.5 ammo, and a single-color line adds +4 shots.
-- **Belt:** holds up to 5 shooters. A shooter hits the first pixel it can see from its side, but only if the colors match. Shooters with leftover shots return to the queue (6 slots).
-- **5 levels:** Heart, Smiley, Fish, Tree, Landscape. There's also an Endless mode.
-- **Meta-progression (light):**
-  - The picture album fills in as you clear pictures.
-  - Coins come with a win-streak multiplier (×1 → ×3).
-  - Boosters: Rainbow shooter (hits any color, 30 coins) and Shuffle tray (20 coins).
-  - Shuffle & continue when the board jams. If you leave instead, your streak resets.
-  - Progress saves to the browser's localStorage.
+Open `tools/editor.html` (or use the "Level editor" link on the game's menu):
 
-## Status
+- Paint pixels on an 8×8 to 16×16 grid, or **import an image** and it snaps to the game colors.
+- **Simulate 40 bot games** for an instant difficulty rating (Easy / Medium / Hard).
+- **Play-test** the level in the game, then copy the level code into `src/levels.js`.
 
-This is a rough prototype for testing whether the mechanic is fun. The numbers (ammo, coin rewards, belt size) aren't balanced yet.
+## Tune the balance (needs Node.js)
 
-See [ROADMAP.md](ROADMAP.md) for the plan from prototype to the App Store and TikTok Mini Games.
+```
+node sim/balance.js --runs 100           # win rate per level
+node sim/balance.js --beltCap 4          # try a different setting
+node sim/economy.js                      # does the coin economy hold up?
+```
+
+Latest results are in [docs/BALANCE.md](docs/BALANCE.md).
 
 ## Project layout
 
 ```
-index.html    the whole game (HTML canvas + vanilla JS)
-README.md     this file
-ROADMAP.md    steps to publish on iOS and TikTok
+index.html              the game (canvas rendering, input, meta-progression)
+src/core.js             all game rules, no drawing; seeded so runs are reproducible
+src/levels.js           level data (pictures as text rows)
+src/economy.js          every price and reward
+src/bot.js              heuristic player used for balancing and the editor's difficulty check
+tools/editor.html       level editor + image-to-pixel converter
+sim/balance.js          per-level win-rate report
+sim/economy.js          coin-flow simulation over a play session
+docs/BALANCE.md         latest balance + economy numbers
+docs/APP_STORE_LISTING.md   draft store copy, keywords, privacy-label notes
+docs/PRIVACY_POLICY.md  draft (template, not legal advice)
+docs/TERMS.md           draft (template, not legal advice)
+ROADMAP.md              plan to the App Store and TikTok Mini Games
 ```
+
+## Status
+
+This is a prototype for checking that the mechanic is fun, and the art is placeholder. The economy has been tightened: a win pays 8 coins plus a streak bonus, and continues cost 30, then 60, then 120, with at most 3 per level. See the roadmap for what's next.
