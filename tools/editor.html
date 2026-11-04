@@ -55,6 +55,14 @@
         <label>Size <select id="size"></select></label>
         <label>Open existing <select id="preset"><option value="">—</option></select></label>
       </div>
+      <div class="row" style="margin-top:8px">
+        <label>When the size changes
+          <select id="resizeMode">
+            <option value="scale">Rescale the picture to fit</option>
+            <option value="crop">Keep pixels, crop or add space</option>
+          </select>
+        </label>
+      </div>
     </div>
     <div class="card">
       <h2>Paint</h2>
@@ -74,6 +82,11 @@
         <label class="check"><input type="checkbox" id="bgRemove" checked> Make the background empty</label>
       </div>
       <div class="gridnote">The image is shrunk to the grid size and each pixel snaps to the nearest game color. Simple, high-contrast images work best.</div>
+      <div id="imgStatus" class="row" style="margin-top:8px;display:none">
+        <span class="gridnote" style="margin:0;flex:1" id="imgName"></span>
+        <button id="reconvert">Rebuild from image</button>
+        <button id="forget">Forget image</button>
+      </div>
     </div>
     <div class="card">
       <h2>Stats</h2>
@@ -188,18 +201,29 @@ window.addEventListener('resize', draw);
 
 // ---------- size / presets / clear ----------
 function setSize(n) {
-  const old = cells; N = n; cells = blank(n);
-  for (let y = 0; y < Math.min(n, old.length); y++) for (let x = 0; x < Math.min(n, old.length); x++) cells[y][x] = old[y][x];
+  const old = cells, on = old.length;
+  N = n; cells = blank(n);
+  if (sourceImg) {
+    convertImage(); // an imported picture is rebuilt cleanly at the new size
+  } else if ($('resizeMode').value === 'scale') {
+    // nearest-neighbor rescale of the painted picture
+    for (let y = 0; y < n; y++) for (let x = 0; x < n; x++) {
+      cells[y][x] = old[Math.min(on - 1, Math.floor((y + 0.5) * on / n))][Math.min(on - 1, Math.floor((x + 0.5) * on / n))];
+    }
+  } else {
+    for (let y = 0; y < Math.min(n, on); y++) for (let x = 0; x < Math.min(n, on); x++) cells[y][x] = old[y][x];
+  }
   $('size').value = n;
 }
 $('size').onchange = () => { setSize(+$('size').value); changed(); };
 $('preset').onchange = () => {
   const l = PB_LEVELS[$('preset').value]; if (!l) return;
+  sourceImg = null; $('file').value = ''; showImgStatus();
   N = l.rows.length; $('size').value = N;
   cells = l.rows.map(r => [...r].map(c => c === '.' ? null : c));
   $('name').value = l.name; $('preset').value = ''; changed();
 };
-$('clear').onclick = () => { cells = blank(N); changed(); };
+$('clear').onclick = () => { cells = blank(N); sourceImg = null; $('file').value = ''; showImgStatus(); changed(); };
 $('name').oninput = () => changed(true);
 
 // ---------- image import ----------
@@ -212,10 +236,28 @@ function nearest(r, g, b) {
   }
   return best;
 }
+let sourceImg = null; // last imported image, kept so size changes can rebuild from it
+function showImgStatus() {
+  $('imgStatus').style.display = sourceImg ? 'flex' : 'none';
+  if (sourceImg) $('imgName').textContent = `Using ${sourceImg.name}: size changes rebuild from it (hand edits are replaced).`;
+}
 $('file').onchange = () => {
   const f = $('file').files[0]; if (!f) return;
   const img = new Image();
   img.onload = () => {
+    sourceImg = { img, name: f.name };
+    convertImage();
+    showImgStatus();
+    changed();
+  };
+  img.src = URL.createObjectURL(f);
+};
+$('reconvert').onclick = () => { if (sourceImg) { convertImage(); changed(); } };
+$('forget').onclick = () => { sourceImg = null; $('file').value = ''; showImgStatus(); };
+$('bgRemove').onchange = () => { if (sourceImg) { convertImage(); changed(); } };
+function convertImage() {
+  const img = sourceImg.img;
+  {
     const c = document.createElement('canvas'); c.width = N; c.height = N;
     const x = c.getContext('2d');
     x.imageSmoothingEnabled = true; x.imageSmoothingQuality = 'high';
@@ -228,17 +270,34 @@ $('file').onchange = () => {
       cells[yy][xx] = d[i + 3] < 128 ? null : nearest(d[i], d[i + 1], d[i + 2]);
     }
     if ($('bgRemove').checked) {
-      // most common color on the border = background; clear it where it touches the edge
-      const count = {};
-      for (let k = 0; k < N; k++) for (const [a, b] of [[k, 0], [k, N - 1], [0, k], [N - 1, k]]) { const v = cells[b][a]; if (v) count[v] = (count[v] || 0) + 1; }
-      const bg = Object.keys(count).sort((a, b) => count[b] - count[a])[0];
-      if (bg && count[bg] > N) for (let k = 0; k < N; k++) for (const [a, b] of [[k, 0], [k, N - 1], [0, k], [N - 1, k]]) if (cells[b][a] === bg) flood(a, b, null);
+      // Background = average of the original image's corners. Clear every pixel close to that
+      // color that is connected to the edge (so blurry edge pixels don't become stray colors).
+      const full = document.createElement('canvas'); full.width = img.width; full.height = img.height;
+      const fx = full.getContext('2d'); fx.drawImage(img, 0, 0);
+      const corner = (cx, cy) => fx.getImageData(cx, cy, 1, 1).data;
+      const cs = [corner(0, 0), corner(img.width - 1, 0), corner(0, img.height - 1), corner(img.width - 1, img.height - 1)];
+      if (cs.every(p => p[3] >= 128)) {
+        const bg = [0, 1, 2].map(k => cs.reduce((s, p) => s + p[k], 0) / 4);
+        // Treat each pixel as a blend: bg + a * (gameColor - bg). Pick the game color that
+        // explains the pixel best; if it's mostly background (a < 0.5) the pixel becomes empty.
+        for (let yy = 0; yy < N; yy++) for (let xx = 0; xx < N; xx++) {
+          const i = (yy * N + xx) * 4;
+          if (d[i + 3] < 128) { cells[yy][xx] = null; continue; }
+          const px = [d[i] - bg[0], d[i + 1] - bg[1], d[i + 2] - bg[2]];
+          let best = null, bestErr = Infinity, bestA = 0;
+          for (const k in RGB) {
+            const v = [RGB[k][0] - bg[0], RGB[k][1] - bg[1], RGB[k][2] - bg[2]];
+            const vv = v[0] * v[0] + v[1] * v[1] + v[2] * v[2] || 1;
+            const a = Math.max(0, Math.min(1, (px[0] * v[0] + px[1] * v[1] + px[2] * v[2]) / vv));
+            const err = (px[0] - a * v[0]) ** 2 + (px[1] - a * v[1]) ** 2 + (px[2] - a * v[2]) ** 2;
+            if (err < bestErr) { bestErr = err; best = k; bestA = a; }
+          }
+          cells[yy][xx] = bestA < 0.5 ? null : best;
+        }
+      }
     }
-    URL.revokeObjectURL(img.src);
-    changed();
-  };
-  img.src = URL.createObjectURL(f);
-};
+  }
+}
 
 // ---------- stats / export ----------
 function level() { return { id: slug($('name').value), name: $('name').value.trim() || 'Untitled', rows: rows() }; }
