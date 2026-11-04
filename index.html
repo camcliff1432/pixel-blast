@@ -45,7 +45,8 @@ const LIGHT = new Set(['Y', 'L', 'A', 'K', 'O']); // colors that need dark text 
 // ---------- layout ----------
 const PIC = 220, BELT = 24;
 const PIC_X = (W - PIC) / 2, PIC_Y = 58 + BELT;
-const QN = 6, QW = 52, QG = 8, QH = 42, QY = 344, QX = (W - (QN * QW + (QN - 1) * QG)) / 2;
+const QW = 52, QG = 8, QH = 42, QY = 344;
+const QN = () => game.cfg.queueSize, QX = () => (W - (QN() * QW + (QN() - 1) * QG)) / 2;
 const BN = 8, BC = 34, BX = (W - BN * BC) / 2, BY = 398;
 const TRAY_Y = 680, TRAY_CELL = 20;
 
@@ -75,7 +76,7 @@ function start(idx, isEndless, level, isTest) {
   levelIndex = idx;
   storm = false; duel = null; shareLink = '';
   const lv = level || (isEndless ? LEVELS[Math.floor(Math.random() * LEVELS.length)] : LEVELS[idx]);
-  game = new Game(lv, { sand: modeKind === 'sand', boss: modeKind === 'boss' });
+  game = new Game(lv, { sand: modeKind === 'sand', boss: modeKind === 'boss', strictQueue: modeKind === 'strict' });
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
@@ -101,17 +102,17 @@ function startStorm() {
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
-const KIND_LETTER = { classic: 'c', sand: 's', boss: 'b' }, LETTER_KIND = { c: 'classic', s: 'sand', b: 'boss' };
+const KIND_LETTER = { classic: 'c', sand: 's', boss: 'b', strict: 't' }, LETTER_KIND = { c: 'classic', s: 'sand', b: 'boss', t: 'strict' };
 function startDuel(d) {
   testLevel = null; endless = false; storm = false; shareLink = '';
   levelIndex = d.idx;
-  game = new Game(LEVELS[d.idx], { seed: d.seed, sand: d.kind === 'sand', boss: d.kind === 'boss' });
+  game = new Game(LEVELS[d.idx], { seed: d.seed, sand: d.kind === 'sand', boss: d.kind === 'boss', strictQueue: d.kind === 'strict' });
   duel = d;
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
 function makeShareLink() {
-  const kind = game.bossMode ? 'boss' : game.sandMode ? 'sand' : 'classic';
+  const kind = game.bossMode ? 'boss' : game.sandMode ? 'sand' : game.cfg.strictQueue ? 'strict' : 'classic';
   return location.href.split('#')[0] + `#duel-${KIND_LETTER[kind]}-${levelIndex}-${game.seed}-${game.moves}-${Math.round(game.time)}`;
 }
 function copyShare() {
@@ -164,6 +165,8 @@ function handleEvents() {
       toast('Unused shooter returned to queue', '#cbd5e1');
     } else if (e.type === 'lost') {
       toast(`Queue full — ${e.ammo} shots lost`, '#fca5a5');
+    } else if (e.type === 'blocked') {
+      toast(e.free === 0 ? 'Queue full! Launch a shooter before clearing lines' : `This clear needs ${e.need} queue slots — only ${e.free} free`, '#fca5a5');
     } else if (e.type === 'regrow') {
       const pc = PC();
       effects.push({ type: 'grow', x: PIC_X + e.x * pc, y: PIC_Y + e.y * pc, s: pc, color: e.color, t: 0 });
@@ -230,6 +233,8 @@ function updateFx(dt) {
   for (const [k, v] of fallOff) { const nv = v + dt * 16; if (nv >= 0) fallOff.delete(k); else fallOff.set(k, nv); }
 }
 function toast(text, color) {
+  const dup = toasts.find(t => t.text === text);
+  if (dup) { dup.t = Math.min(dup.t, 0.15); return; } // refresh instead of stacking
   toasts.push({ text, color: color || '#fff', t: 0 });
   if (toasts.length > 3) toasts.shift();
 }
@@ -336,7 +341,7 @@ function render() {
   const n = N(), pc = PC();
 
   // HUD
-  const prefix = storm ? '' : (duel ? 'Duel · ' : '') + (game.bossMode ? 'Boss · ' : game.sandMode ? 'Sand · ' : '');
+  const prefix = storm ? '' : (duel ? 'Duel · ' : '') + (game.bossMode ? 'Boss · ' : game.sandMode ? 'Sand · ' : game.cfg.strictQueue ? 'Strict · ' : '');
   const title = storm ? 'Sandstorm' : prefix + (testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : game.level.name);
   text(title, 16, 22, 16, '#f1f5f9', 'left', '700');
   const t = Math.floor(game.time), clock = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
@@ -408,8 +413,8 @@ function render() {
 
   // queue
   text(`TAP A SHOOTER TO LAUNCH  ·  BELT ${game.belt.length}/${game.beltCap}`, W / 2, 335, 10, '#64748b', 'center', '700');
-  for (let i = 0; i < QN; i++) {
-    const x = QX + i * (QW + QG);
+  for (let i = 0; i < QN(); i++) {
+    const x = QX() + i * (QW + QG);
     rr(x, QY, QW, QH, 10);
     ctx.fillStyle = i < game.queue.length ? '#262a35' : '#1a1d25';
     ctx.fill();
@@ -421,6 +426,7 @@ function render() {
   ctx.fillStyle = '#1a1d25'; ctx.fill();
   const preview = drag && mode === 'play' ? dragGeom() : null;
   let clearSet = null;
+  const blocked = preview && preview.ok && game.cfg.strictQueue && game.wouldOverflowQueue(preview.p, preview.gx, preview.gy);
   if (preview && preview.ok) {
     const tmp = game.board.map(r => r.slice());
     for (const [x, y] of preview.p.sh) tmp[preview.gy + y][preview.gx + x] = preview.p.color;
@@ -436,7 +442,7 @@ function render() {
     if (game.board[y][x]) block(px, py, BC, game.board[y][x]);
     if (clearSet && clearSet.has(y * BN + x)) {
       rr(px + 1, py + 1, BC - 2, BC - 2, 6);
-      ctx.fillStyle = 'rgba(255,255,255,.22)'; ctx.fill();
+      ctx.fillStyle = blocked ? 'rgba(239,68,68,.45)' : 'rgba(255,255,255,.22)'; ctx.fill();
     }
   }
   if (preview && preview.ok) for (const [x, y] of preview.p.sh) block(BX + (preview.gx + x) * BC, BY + (preview.gy + y) * BC, BC, preview.p.color, 0.45);
@@ -484,16 +490,17 @@ function drawMenu() {
   ];
   lines.forEach((l, i) => text(l, W / 2, 112 + i * 17, 11.5, '#cbd5e1', 'center', '500'));
   // mode chips
-  const kinds = [['Classic', 'classic'], ['Sand', 'sand'], ['Boss', 'boss']];
+  const kinds = [['Classic', 'classic'], ['Sand', 'sand'], ['Boss', 'boss'], ['Strict', 'strict']];
   kinds.forEach(([label, v], i) => {
-    const bx = W / 2 - 158 + i * 108, by = 192, on = modeKind === v;
-    rr(bx, by, 100, 30, 15); ctx.fillStyle = on ? '#fde68a' : '#262a35'; ctx.fill();
-    text(label, bx + 50, by + 15, 13, on ? '#111827' : '#cbd5e1', 'center', '800');
-    buttons.push({ x: bx, y: by, w: 100, h: 30, fn: () => { modeKind = v; } });
+    const cw = 84, bx = (W - (4 * cw + 3 * 6)) / 2 + i * (cw + 6), by = 192, on = modeKind === v;
+    rr(bx, by, cw, 30, 15); ctx.fillStyle = on ? '#fde68a' : '#262a35'; ctx.fill();
+    text(label, bx + cw / 2, by + 15, 13, on ? '#111827' : '#cbd5e1', 'center', '800');
+    buttons.push({ x: bx, y: by, w: cw, h: 30, fn: () => { modeKind = v; } });
   });
   const hint = { classic: 'Clear the picture before the board jams',
     sand: 'Sand: pixels fall · slower belt · no merging shooters',
-    boss: 'Boss: the picture regrows pixels — outpace it' }[modeKind];
+    boss: 'Boss: the picture regrows pixels — outpace it',
+    strict: 'Strict: 4-slot queue — if it\'s full, you can\'t clear lines' }[modeKind];
   text(hint, W / 2, 236, 11, modeKind === 'classic' ? '#94a3b8' : '#fde68a', 'center', '600');
   // album
   text(`ALBUM  ${album.size}/${LEVELS.length}  ·  tap a picture to play it`, W / 2, 262, 11, '#94a3b8', 'center', '800');
@@ -631,8 +638,8 @@ cv.addEventListener('pointerdown', e => {
   const [x, y] = pt(e);
   for (const b of buttons) if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.fn(); return; }
   if (mode !== 'play') return;
-  for (let i = 0; i < QN; i++) {
-    const qx = QX + i * (QW + QG);
+  for (let i = 0; i < QN(); i++) {
+    const qx = QX() + i * (QW + QG);
     if (x >= qx && x <= qx + QW && y >= QY && y <= QY + QH) {
       const r = game.launch(i);
       if (r === 'full') toast('Belt is full', '#fca5a5');
@@ -678,7 +685,7 @@ function frame(t) {
 }
 
 // Play-test a level sent from the editor (index.html#test)
-const dm = location.hash.match(/^#duel-([csb])-(\d+)-(\d+)-(\d+)-(\d+)$/);
+const dm = location.hash.match(/^#duel-([csbt])-(\d+)-(\d+)-(\d+)-(\d+)$/);
 if (dm && LEVELS[+dm[2]]) {
   startDuel({ kind: LETTER_KIND[dm[1]], idx: +dm[2], seed: +dm[3], moves: +dm[4], secs: +dm[5] });
   toast(`Duel! Beat ${+dm[4]} moves on ${LEVELS[+dm[2]].name}`, '#a7f3d0');

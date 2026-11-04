@@ -20,6 +20,8 @@ for (const k of Object.keys(DEFAULTS)) {
   if (v != null) cfg[k] = v === 'true' ? true : v === 'false' ? false : +v;
 }
 if (args.includes('--sand')) cfg.sand = true;
+if (args.includes('--strict')) cfg.strictQueue = true;
+if (args.includes('--boss')) cfg.boss = true;
 
 const pct = x => (x * 100).toFixed(0).padStart(4) + '%';
 const pad = (s, n) => String(s).padEnd(n);

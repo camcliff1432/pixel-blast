@@ -65,3 +65,13 @@ Same-color shooters now merge in the queue. Win rates are unchanged, and lost sh
 
 - **Boss:** a regrow interval of 3.5 s × √(60 / pixels) (Heart 3.4 s, Rocket 2.3 s) plays about 10–20 points harder than Classic. Bot first-try wins: Heart 67%, Smiley 50%, Fish 73%, Tree 63%, Mushroom 33%, Landscape 37%, Rocket 33%.
 - **Sandstorm:** at first the bot always lost to board jams before the storm mattered, so in Sandstorm a jam triggers a 6-pixel surge instead of ending the run. After that the bot survived forever, because it out-cleared the storm's top speed. The current settings (start 2.0 s, ×0.99 per pixel, floor 0.2 s) give a median survival of about 3.5 minutes, and every run ends buried.
+
+## Strict mode
+
+With merging on and the normal 6-slot queue, the strict rule never triggered: the bot's results were identical to Classic. With no merging, bot first-try wins were:
+
+| Queue | Heart | Smiley | Fish | Tree | Mushroom | Landscape | Rocket |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 6 | 75% | 68% | 60% | 60% | 53% | 50% | 33% |
+| **4 (chosen)** | 75% | 60% | 53% | 50% | 38% | 38% | 28% |
+| 3 | 75% | 50% | 40% | 45% | 35% | 15% | 25% |

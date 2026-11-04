@@ -53,6 +53,8 @@
     sand: false,        // sand mode: pixels above a shot pixel fall down
     sandLapMult: 1.5,   // sand mode: belt is this much slower
     sandMergeQueue: false, // sand mode: same-color shooters do NOT merge (merging made it too easy)
+    strictQueue: false, // strict mode: you can't clear lines if the new shooters won't fit in the queue
+    strictQueueSize: 4, // strict mode: smaller queue, and no same-color merging (bot: ~10-20 pts harder)
     boss: false,        // boss mode: the picture regrows missing pixels over time
     bossInterval: 0,    // seconds between regrown pixels; 0 = auto from picture size
     storm: false,       // sandstorm: endless, sand pixels rain in from the top (implies sand)
@@ -106,6 +108,7 @@
     constructor(level, opts) {
       opts = opts || {};
       this.cfg = Object.assign({}, DEFAULTS, opts);
+      if (this.cfg.strictQueue) this.cfg.queueSize = this.cfg.strictQueueSize;
       this.seed = opts.seed != null ? opts.seed >>> 0 : Math.floor(Math.random() * 4294967296);
       this.rng = rngFrom(this.seed);            // pieces: same seed = same piece order (duels)
       this.envRng = rngFrom(this.seed ^ 0x9e3779b9); // boss regrowth / sandstorm, kept separate so pieces stay in sync
@@ -138,7 +141,7 @@
       this.bossInterval = this.cfg.bossInterval || autoBossInterval(pixelCount(level));
       this.stormTimer = 0; this.stormInterval = this.cfg.stormStart; this.stormDropped = 0;
       this.lapSeconds = (this.cfg.lapSeconds || autoLapSeconds(this.N)) * (this.sandMode ? this.cfg.sandLapMult : 1);
-      this.mergeQueue = this.sandMode ? this.cfg.sandMergeQueue : this.cfg.mergeQueue;
+      this.mergeQueue = this.sandMode ? this.cfg.sandMergeQueue : this.cfg.strictQueue ? false : this.cfg.mergeQueue;
       this.speed = this.lap / this.lapSeconds;
       this.launchGapSlots = this.cfg.launchGap * this.N / 10;
       this.ammoPerBlock = level.ammoPerBlock || this.cfg.ammoPerBlock || autoAmmoPerBlock(level);
@@ -203,6 +206,10 @@
       if (this.status !== 'play') return false;
       const p = this.tray[i];
       if (!p || !this.fits(p.sh, gx, gy)) return false;
+      if (this.cfg.strictQueue && this.wouldOverflowQueue(p, gx, gy)) {
+        this.emit('blocked', { need: this.lastNeed, free: this.cfg.queueSize - this.queue.length });
+        return false;
+      }
       for (const [x, y] of p.sh) this.board[gy + y][gx + x] = p.color;
       this.score += p.sh.length;
       this.moves++;
@@ -212,6 +219,20 @@
       if (this.tray.every(t => !t)) this.refillTray();
       this.checkJam();
       return true;
+    }
+    // Strict mode check: would placing this piece clear lines whose shooters can't fit in the queue?
+    wouldOverflowQueue(p, gx, gy) {
+      const b = this.board.map(r => r.slice());
+      for (const [x, y] of p.sh) b[gy + y][gx + x] = p.color;
+      const { rows, cols } = fullLines(b);
+      if (!rows.length && !cols.length) return false;
+      const colors = new Set();
+      for (const y of rows) for (let x = 0; x < this.BN; x++) colors.add(b[y][x]);
+      for (const x of cols) for (let y = 0; y < this.BN; y++) colors.add(b[y][x]);
+      let need = 0;
+      for (const c of colors) if (!(this.mergeQueue && this.queue.some(s => s.color === c))) need++;
+      this.lastNeed = need;
+      return need > this.cfg.queueSize - this.queue.length;
     }
     // Put a shooter in the queue (merging into a same-color one if enabled). Returns false if no room.
     enqueue(color, ammo) {

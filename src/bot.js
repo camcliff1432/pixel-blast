@@ -68,6 +68,7 @@
       if (!p) continue;
       for (let y = 0; y < game.BN; y++) for (let x = 0; x < game.BN; x++) {
         if (!game.fits(p.sh, x, y)) continue;
+        if (game.cfg.strictQueue && game.wouldOverflowQueue(p, x, y)) continue;
         const s = scorePlacement(game, p, x, y, need);
         if (!best || s > best.s) best = { i, x, y, s };
       }
@@ -108,6 +109,7 @@
       if (g.status !== 'play') break;
       const m = chooseMove(g);
       if (m) g.placePiece(m.i, m.x, m.y);
+      else if (g.cfg.strictQueue && g.queue.length) { const li = g.queue.reduce((b, q, i, a) => q.ammo > a[b].ammo ? i : b, 0); g.launch(li); } // blocked: free a slot
       for (let t = 0; t < think && g.status === 'play'; t += dt) {
         const li = chooseLaunch(g);
         if (li >= 0) g.launch(li);

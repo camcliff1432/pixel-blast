@@ -86,6 +86,7 @@ Fallback for a faster iOS-only release: wrap the existing HTML in **Capacitor**.
 - **Endless:** pictures keep coming until the board jams.
 - **Boss:** the picture regrows missing pixels (next to the remaining ones) every few seconds; faster on bigger pictures. A menu toggle like Sand.
 - **Sandstorm:** endless survival on a 12×12 dune. New sand pixels rain in faster and faster; a jam doesn't end the run but triggers a 6-pixel sand surge; you lose when a column fills to the top. Best time is saved.
+- **Strict:** a 4-slot queue with no same-color merging. If a clear would create more shooters than there are free slots, the block goes back to your hand and the rows that would clear glow red while you drag. You have to launch shooters to make room.
 - **Async Duel:** after a win, "Challenge a friend" copies a link with the level, mode and seed. Your friend gets the same piece order, no continues, and has to beat your move count (time breaks ties). No server needed.
 
 **Ideas, roughly by effort (small → big)**
