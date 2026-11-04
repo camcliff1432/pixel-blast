@@ -428,7 +428,7 @@ function drawMenu() {
     text(label, bx + 50, by + 15, 13, on ? '#111827' : '#cbd5e1', 'center', '800');
     buttons.push({ x: bx, y: by, w: 100, h: 30, fn: () => { sandMode = v; } });
   });
-  if (sandMode) text('Sand: pixels above a shot pixel fall down', W / 2, 290, 11, '#fde68a', 'center', '600');
+  if (sandMode) text('Sand: pixels fall · slower belt · no merging shooters', W / 2, 290, 11, '#fde68a', 'center', '600');
   // album
   text(`ALBUM  ${album.size}/${LEVELS.length}  ·  tap a picture to play it`, W / 2, 306, 11, '#94a3b8', 'center', '800');
   const perRow = 4, s = 52, gap = 30;

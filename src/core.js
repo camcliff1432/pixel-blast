@@ -51,6 +51,8 @@
     colorNeedBonus: 4,  // weight added to colors the picture still needs
     ammoPerBlock: 0,    // shots per cleared block; 0 = auto (1 under 150 px, else 1 per 100 px)
     sand: false,        // sand mode: pixels above a shot pixel fall down
+    sandLapMult: 1.5,   // sand mode: belt is this much slower
+    sandMergeQueue: false, // sand mode: same-color shooters do NOT merge (merging made it too easy)
   };
 
   function rngFrom(seed) {
@@ -108,11 +110,12 @@
       this.pic = level.rows.map(r => [...r].map(c => (c === '.' ? null : c)));
       this.lap = 4 * this.N;
       this.beltCap = this.cfg.beltCap || autoBeltCap(this.N);
-      this.lapSeconds = this.cfg.lapSeconds || autoLapSeconds(this.N);
+      this.sandMode = !!(this.cfg.sand || level.sand);
+      this.lapSeconds = (this.cfg.lapSeconds || autoLapSeconds(this.N)) * (this.sandMode ? this.cfg.sandLapMult : 1);
+      this.mergeQueue = this.sandMode ? this.cfg.sandMergeQueue : this.cfg.mergeQueue;
       this.speed = this.lap / this.lapSeconds;
       this.launchGapSlots = this.cfg.launchGap * this.N / 10;
       this.ammoPerBlock = level.ammoPerBlock || this.cfg.ammoPerBlock || autoAmmoPerBlock(level);
-      this.sandMode = !!(this.cfg.sand || level.sand);
       this.colors = KEYS.filter(k => level.rows.some(r => r.includes(k)));
       if (!this.colors.length) this.colors = ['R'];
     }
@@ -186,7 +189,7 @@
     }
     // Put a shooter in the queue (merging into a same-color one if enabled). Returns false if no room.
     enqueue(color, ammo) {
-      if (this.cfg.mergeQueue) {
+      if (this.mergeQueue) {
         const q = this.queue.find(s => s.color === color);
         if (q) { q.ammo += ammo; return true; }
       }

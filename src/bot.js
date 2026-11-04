@@ -29,7 +29,7 @@
         const shots = counts[c] * mult;
         const useful = Math.min(shots, Math.max(0, need[c] || 0));
         value += (useful * 3 + shots * 0.3) / game.ammoPerBlock;
-        if (!(game.cfg.mergeQueue && game.queue.some(s => s.color === c))) shooters++;
+        if (!(game.mergeQueue && game.queue.some(s => s.color === c))) shooters++;
       }
       if (shooters > queueRoom) value -= (shooters - queueRoom) * 15; // shots would be lost
       for (const k of seen) b[(k / BN) | 0][k % BN] = null;
