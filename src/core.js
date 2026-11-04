@@ -53,6 +53,13 @@
     sand: false,        // sand mode: pixels above a shot pixel fall down
     sandLapMult: 1.5,   // sand mode: belt is this much slower
     sandMergeQueue: false, // sand mode: same-color shooters do NOT merge (merging made it too easy)
+    boss: false,        // boss mode: the picture regrows missing pixels over time
+    bossInterval: 0,    // seconds between regrown pixels; 0 = auto from picture size
+    storm: false,       // sandstorm: endless, sand pixels rain in from the top (implies sand)
+    stormStart: 2.0,    // seconds between new sand pixels at the start
+    stormAccel: 0.99,   // interval multiplier after each new pixel (speeds up)
+    stormMin: 0.2,      // fastest interval (bot survives ~3.5 min median with these)
+    stormSurge: 6,      // sandstorm: a jammed board reshuffles the tray but drops this many extra pixels
   };
 
   function rngFrom(seed) {
@@ -80,6 +87,18 @@
   function pixelCount(level) { return level.rows.join('').replace(/\./g, '').length; }
   function autoAmmoPerBlock(level) { const px = pixelCount(level); return px < 150 ? 1 : Math.round(px / 100); }
   // Big pictures need more belt throughput or they drag on (tested with the balance bot).
+  // Boss regrow speed: ~1 pixel every 3.5s on a 60-pixel picture, faster on bigger ones.
+  function autoBossInterval(px) { return Math.max(0.35, 3.5 * Math.sqrt(60 / Math.max(1, px))); }
+  // Sandstorm starting picture: a random dune along the bottom.
+  function stormLevel(seed, n, colors) {
+    const rng = rngFrom(seed), cols = colors || ['R', 'Y', 'G', 'B'];
+    const rows = Array.from({ length: n }, () => Array(n).fill('.'));
+    for (let x = 0; x < n; x++) {
+      const h = 2 + Math.floor(rng() * 3) + Math.round(Math.sin(x / n * Math.PI) * 2);
+      for (let y = n - h; y < n; y++) rows[y][x] = cols[Math.floor(rng() * cols.length)];
+    }
+    return { id: 'sandstorm', name: 'Sandstorm', rows: rows.map(r => r.join('')) };
+  }
   function autoBeltCap(n) { return Math.max(5, Math.min(10, 5 + Math.round((n - 12) / 4))); }
   function autoLapSeconds(n) { return n <= 12 ? 5.7 : Math.max(4, 5.7 - (n - 12) * 1.7 / 20); }
 
@@ -88,7 +107,8 @@
       opts = opts || {};
       this.cfg = Object.assign({}, DEFAULTS, opts);
       this.seed = opts.seed != null ? opts.seed >>> 0 : Math.floor(Math.random() * 4294967296);
-      this.rng = rngFrom(this.seed);
+      this.rng = rngFrom(this.seed);            // pieces: same seed = same piece order (duels)
+      this.envRng = rngFrom(this.seed ^ 0x9e3779b9); // boss regrowth / sandstorm, kept separate so pieces stay in sync
       this.events = [];
       this.BN = this.cfg.boardSize;
       this.board = Array.from({ length: this.BN }, () => Array(this.BN).fill(null));
@@ -98,7 +118,7 @@
       this.score = 0; this.lines = 0; this.moves = 0; this.time = 0;
       this.shotsFired = 0; this.shotsLost = 0; this.picsCleared = 0; this.continues = 0;
       this._id = 0;
-      this.status = 'play'; // 'play' | 'won' | 'jammed'
+      this.status = 'play'; // 'play' | 'won' | 'jammed' | 'buried'
       this.setPicture(level);
       this.refillTray();
     }
@@ -110,7 +130,13 @@
       this.pic = level.rows.map(r => [...r].map(c => (c === '.' ? null : c)));
       this.lap = 4 * this.N;
       this.beltCap = this.cfg.beltCap || autoBeltCap(this.N);
-      this.sandMode = !!(this.cfg.sand || level.sand);
+      this.stormMode = !!this.cfg.storm;
+      this.sandMode = !!(this.cfg.sand || level.sand || this.stormMode);
+      this.bossMode = !!(this.cfg.boss || level.boss) && !this.stormMode;
+      this.original = level.rows.map(r => [...r].map(c => (c === '.' ? null : c)));
+      this.bossTimer = 0;
+      this.bossInterval = this.cfg.bossInterval || autoBossInterval(pixelCount(level));
+      this.stormTimer = 0; this.stormInterval = this.cfg.stormStart; this.stormDropped = 0;
       this.lapSeconds = (this.cfg.lapSeconds || autoLapSeconds(this.N)) * (this.sandMode ? this.cfg.sandLapMult : 1);
       this.mergeQueue = this.sandMode ? this.cfg.sandMergeQueue : this.cfg.mergeQueue;
       this.speed = this.lap / this.lapSeconds;
@@ -238,6 +264,12 @@
     checkJam() {
       const left = this.tray.filter(Boolean);
       if (this.status === 'play' && left.length && !left.some(p => this.canPlaceAnywhere(p.sh))) {
+        if (this.stormMode) { // no game over: the storm surges instead
+          this.refillTray();
+          this.emit('surge', { n: this.cfg.stormSurge });
+          for (let i = 0; i < this.cfg.stormSurge && this.status === 'play'; i++) this.stormDrop();
+          return;
+        }
         this.status = 'jammed';
         this.emit('jam', {});
       }
@@ -321,6 +353,31 @@
       this.emit('fire', { slot: i, x, y, color: s.color, pcolor });
       if (this.sandMode) this.dropColumn(x, y);
     }
+    // Boss: bring back one missing pixel, preferring ones touching the remaining picture.
+    regrow() {
+      const N = this.N, near = [], any = [];
+      for (let y = 0; y < N; y++) for (let x = 0; x < N; x++) {
+        if (!this.original[y][x] || this.pic[y][x]) continue;
+        any.push([x, y]);
+        if ([[1, 0], [-1, 0], [0, 1], [0, -1]].some(([dx, dy]) => this.pic[y + dy] && this.pic[y + dy][x + dx])) near.push([x, y]);
+      }
+      const pool = near.length ? near : any;
+      if (!pool.length) return;
+      const [x, y] = pool[Math.floor(this.envRng() * pool.length)];
+      this.pic[y][x] = this.original[y][x];
+      this.emit('regrow', { x, y, color: this.pic[y][x] });
+    }
+    // Sandstorm: a new pixel falls into a random column; a full column buries you.
+    stormDrop() {
+      const N = this.N, x = Math.floor(this.envRng() * N);
+      const color = this.colors[Math.floor(this.envRng() * this.colors.length)];
+      if (this.pic[0][x]) { this.status = 'buried'; this.emit('buried', { x }); return; }
+      let y = 0;
+      while (y + 1 < N && !this.pic[y + 1][x]) y++;
+      this.pic[y][x] = color;
+      this.stormDropped++;
+      this.emit('spawn', { x, y, color });
+    }
     update(dt) {
       if (this.status !== 'play') return;
       this.time += dt;
@@ -340,6 +397,19 @@
           else { this.shotsLost += s.ammo; this.emit('lost', { color: s.color, ammo: s.ammo }); }
         }
       }
+      if (this.bossMode && this.countPixels() > 0) {
+        this.bossTimer += dt;
+        while (this.bossTimer >= this.bossInterval) { this.bossTimer -= this.bossInterval; this.regrow(); }
+      }
+      if (this.stormMode) {
+        this.stormTimer += dt;
+        while (this.stormTimer >= this.stormInterval && this.status === 'play') {
+          this.stormTimer -= this.stormInterval;
+          this.stormInterval = Math.max(this.cfg.stormMin, this.stormInterval * this.cfg.stormAccel);
+          this.stormDrop();
+        }
+        return; // sandstorm never ends by clearing the picture
+      }
       if (this.countPixels() === 0) {
         this.picsCleared++;
         this.status = 'won';
@@ -348,7 +418,7 @@
     }
   }
 
-  const api = { Game, PALETTE, KEYS, COLOR_NAMES, RAINBOW, SHAPES, DEFAULTS, fullLines, shapeSize, rngFrom, pixelCount, autoAmmoPerBlock, autoBeltCap, autoLapSeconds };
+  const api = { Game, PALETTE, KEYS, COLOR_NAMES, RAINBOW, SHAPES, DEFAULTS, fullLines, shapeSize, rngFrom, pixelCount, autoAmmoPerBlock, autoBeltCap, autoLapSeconds, autoBossInterval, stormLevel };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PBCore = api;
 })(typeof self !== 'undefined' ? self : this);

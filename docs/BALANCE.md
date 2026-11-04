@@ -60,3 +60,8 @@ Large pictures were nearly unwinnable at first: a 1024-pixel, 8-color sunset gav
 Bot results on the test sunset after scaling (12 runs each): 16×16 58%, 24×24 50%, 32×32 42% first-try wins, and 100% with continues, at about 45–60 s. Sand mode is about 0–8 points harder.
 
 Same-color shooters now merge in the queue. Win rates are unchanged, and lost shots dropped to zero.
+
+## Boss and Sandstorm (node sim/modes.js)
+
+- **Boss:** a regrow interval of 3.5 s × √(60 / pixels) (Heart 3.4 s, Rocket 2.3 s) plays about 10–20 points harder than Classic. Bot first-try wins: Heart 67%, Smiley 50%, Fish 73%, Tree 63%, Mushroom 33%, Landscape 37%, Rocket 33%.
+- **Sandstorm:** at first the bot always lost to board jams before the storm mattered, so in Sandstorm a jam triggers a 6-pixel surge instead of ending the run. After that the bot survived forever, because it out-cleared the storm's top speed. The current settings (start 2.0 s, ×0.99 per pixel, floor 0.2 s) give a median survival of about 3.5 minutes, and every run ends buried.

@@ -84,6 +84,9 @@ Fallback for a faster iOS-only release: wrap the existing HTML in **Capacitor**.
 - **Classic:** clear the picture, using levels and an album.
 - **Sand:** pixels above a shot pixel fall down. A toggle on the menu, or `sand: true` on a level. It changes which pixels are exposed, so the order you shoot in matters.
 - **Endless:** pictures keep coming until the board jams.
+- **Boss:** the picture regrows missing pixels (next to the remaining ones) every few seconds; faster on bigger pictures. A menu toggle like Sand.
+- **Sandstorm:** endless survival on a 12×12 dune. New sand pixels rain in faster and faster; a jam doesn't end the run but triggers a 6-pixel sand surge; you lose when a column fills to the top. Best time is saved.
+- **Async Duel:** after a win, "Challenge a friend" copies a link with the level, mode and seed. Your friend gets the same piece order, no continues, and has to beat your move count (time breaks ties). No server needed.
 
 **Ideas, roughly by effort (small → big)**
 | Mode | How it plays | Why it's interesting |
@@ -95,8 +98,5 @@ Fallback for a faster iOS-only release: wrap the existing HTML in **Capacitor**.
 | Move Puzzle | Hand-made levels with a fixed piece sequence and a move limit | Pure logic levels; no randomness |
 | Layers | Clearing a picture reveals a second picture underneath | Bigger "payoff" levels; good for chapter finales |
 | Tilt Sand | Sand mode plus a button that changes the direction gravity pulls | Combines the tilt-puzzle idea with sand |
-| Boss Picture | A creature picture regrows a pixel every few seconds; out-pace it | Tension and a clear villain |
 | Paint Mode (reverse) | Shooters *add* pixels to a blank canvas to recreate a target picture | Same mechanics, opposite fantasy: creating, not destroying |
-| Sandstorm (endless) | New sand pixels rain onto the picture from the top over time | An endless survival mode with rising pressure |
 | Special pixels | Stone (2 hits), bomb (clears neighbors), key (unlocks a locked region) | Adds variety to classic levels every ~10 levels |
-| Duel (async) | Two players get the same seed; whoever clears in fewer moves wins | Social without needing real-time networking |

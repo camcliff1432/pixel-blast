@@ -116,7 +116,8 @@
       g.drain();
     }
     return {
-      result: g.status === 'won' ? 'won' : g.status === 'jammed' ? 'jammed' : 'timeout',
+      result: g.status === 'won' ? 'won' : g.status === 'jammed' ? 'jammed' : g.status === 'buried' ? 'buried' : 'timeout',
+      shotsFired: g.shotsFired, stormDropped: g.stormDropped,
       time: g.time, moves: g.moves, lines: g.lines, continues: g.continues,
       shotsLost: g.shotsLost, pixelsLeft: g.countPixels(), total: level.rows.join('').replace(/\./g, '').length,
     };

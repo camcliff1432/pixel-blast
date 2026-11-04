@@ -18,7 +18,7 @@
 <script>
 (() => {
 'use strict';
-const { Game, PALETTE, RAINBOW, fullLines } = PBCore;
+const { Game, PALETTE, RAINBOW, fullLines, stormLevel } = PBCore;
 const LEVELS = PB_LEVELS;
 
 const ECON = PB_ECON; // prices and rewards: src/economy.js
@@ -50,26 +50,32 @@ const BN = 8, BC = 34, BX = (W - BN * BC) / 2, BY = 398;
 const TRAY_Y = 680, TRAY_CELL = 20;
 
 // ---------- state ----------
-let mode = 'menu', game = null, levelIndex = 0, endless = false, testLevel = null, sandMode = false;
+let mode = 'menu', game = null, levelIndex = 0, endless = false, testLevel = null;
+let modeKind = 'classic';   // 'classic' | 'sand' | 'boss' (applies to album levels and endless)
+let storm = false;          // sandstorm run
+let duel = null;            // { kind, idx, seed, moves, secs } when playing a challenge link
+let shareLink = '', bestStorm = 0;
 let fallOff = new Map(); // sand mode: 'x,y' -> remaining fall distance in cells (negative)
 let effects = [], projs = [], toasts = [], drag = null, buttons = [], time = 0, winDelay = 0;
 let coins = ECON.startCoins, streak = 0, album = new Set(), result = null;
 try {
   const s = JSON.parse(localStorage.getItem('pixelblast-meta-v3') || 'null');
-  if (s) { coins = s.coins; streak = s.streak; album = new Set(s.album); }
+  if (s) { coins = s.coins; streak = s.streak; album = new Set(s.album); bestStorm = s.bestStorm || 0; }
 } catch (_) {}
 function saveMeta() {
-  try { localStorage.setItem('pixelblast-meta-v3', JSON.stringify({ coins, streak, album: [...album] })); } catch (_) {}
+  try { localStorage.setItem('pixelblast-meta-v3', JSON.stringify({ coins, streak, album: [...album], bestStorm })); } catch (_) {}
 }
 const streakMult = s => Math.min(ECON.streakCap, 1 + ECON.streakStep * Math.max(0, s - 1));
 const continueCost = () => game ? ECON.continueCosts[game.continues] : null; // undefined when out of continues
 const N = () => game.N, PC = () => PIC / game.N;
 
-function start(idx, isEndless, level) {
+function start(idx, isEndless, level, isTest) {
+  testLevel = isTest ? level : null; // only a real play-test keeps the test flag
   endless = !!isEndless;
   levelIndex = idx;
+  storm = false; duel = null; shareLink = '';
   const lv = level || (isEndless ? LEVELS[Math.floor(Math.random() * LEVELS.length)] : LEVELS[idx]);
-  game = new Game(lv, { sand: sandMode });
+  game = new Game(lv, { sand: modeKind === 'sand', boss: modeKind === 'boss' });
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
@@ -87,8 +93,35 @@ function useBooster(kind) {
   coins -= cost;
   saveMeta();
 }
+function startStorm() {
+  testLevel = null; endless = false;
+  const seed = Math.floor(Math.random() * 1e9);
+  game = new Game(stormLevel(seed, 12), { storm: true, seed });
+  storm = true; duel = null; shareLink = '';
+  effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
+  mode = 'play';
+}
+const KIND_LETTER = { classic: 'c', sand: 's', boss: 'b' }, LETTER_KIND = { c: 'classic', s: 'sand', b: 'boss' };
+function startDuel(d) {
+  testLevel = null; endless = false; storm = false; shareLink = '';
+  levelIndex = d.idx;
+  game = new Game(LEVELS[d.idx], { seed: d.seed, sand: d.kind === 'sand', boss: d.kind === 'boss' });
+  duel = d;
+  effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
+  mode = 'play';
+}
+function makeShareLink() {
+  const kind = game.bossMode ? 'boss' : game.sandMode ? 'sand' : 'classic';
+  return location.href.split('#')[0] + `#duel-${KIND_LETTER[kind]}-${levelIndex}-${game.seed}-${game.moves}-${Math.round(game.time)}`;
+}
+function copyShare() {
+  shareLink = makeShareLink();
+  try {
+    navigator.clipboard.writeText(shareLink).then(() => toast('Challenge link copied!', '#a7f3d0'), () => toast('Copy the link shown below', '#fde68a'));
+  } catch (_) { toast('Copy the link shown below', '#fde68a'); }
+}
 function leaveRun() {
-  if (mode === 'over' && !endless && !testLevel && streak > 0) { streak = 0; saveMeta(); }
+  if (mode === 'over' && !endless && !testLevel && !storm && !duel && streak > 0) { streak = 0; saveMeta(); }
 }
 
 // ---------- geometry ----------
@@ -131,6 +164,20 @@ function handleEvents() {
       toast('Unused shooter returned to queue', '#cbd5e1');
     } else if (e.type === 'lost') {
       toast(`Queue full — ${e.ammo} shots lost`, '#fca5a5');
+    } else if (e.type === 'regrow') {
+      const pc = PC();
+      effects.push({ type: 'grow', x: PIC_X + e.x * pc, y: PIC_Y + e.y * pc, s: pc, color: e.color, t: 0 });
+    } else if (e.type === 'spawn') {
+      fallOff.set(`${e.x},${e.y}`, -(e.y + 1.5));
+    } else if (e.type === 'surge') {
+      toast(`Jammed! Sand surge: +${e.n} pixels`, '#fdba74');
+    } else if (e.type === 'buried') {
+      const secs = Math.round(game.time), earned = Math.floor(game.shotsFired / ECON.stormPixelsPerCoin);
+      const isBest = secs > bestStorm;
+      if (isBest) bestStorm = secs;
+      coins += earned; saveMeta();
+      result = { storm: true, secs, earned, isBest };
+      mode = 'over'; drag = null;
     } else if (e.type === 'jam') {
       mode = 'over'; drag = null;
     } else if (e.type === 'won') {
@@ -150,6 +197,12 @@ function finishWin() {
     return;
   }
   mode = 'win'; drag = null;
+  if (duel) {
+    const you = { moves: game.moves, secs: Math.round(game.time) };
+    const won = you.moves < duel.moves || (you.moves === duel.moves && you.secs <= duel.secs);
+    result = { duel: true, won, you };
+    return;
+  }
   if (testLevel) { result = { reward: 0, mult: 1, isNew: false, test: true }; return; }
   streak++;
   const mult = streakMult(streak);
@@ -283,9 +336,14 @@ function render() {
   const n = N(), pc = PC();
 
   // HUD
-  const title = (game.sandMode ? 'Sand · ' : '') + (testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : game.level.name);
+  const prefix = storm ? '' : (duel ? 'Duel · ' : '') + (game.bossMode ? 'Boss · ' : game.sandMode ? 'Sand · ' : '');
+  const title = storm ? 'Sandstorm' : prefix + (testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : game.level.name);
   text(title, 16, 22, 16, '#f1f5f9', 'left', '700');
-  text(`${game.countPixels()} px left`, 16, 42, 11, '#94a3b8', 'left', '700');
+  const t = Math.floor(game.time), clock = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
+  const sub = storm ? `${clock} survived · ${game.shotsFired} blasted · best ${Math.floor(bestStorm / 60)}:${String(bestStorm % 60).padStart(2, '0')}`
+    : duel ? `${game.countPixels()} px left · ${game.moves} moves (beat ${duel.moves})`
+    : `${game.countPixels()} px left`;
+  text(sub, 16, 42, 11, storm ? '#fdba74' : duel ? '#a7f3d0' : '#94a3b8', 'left', '700');
   text(`${game.score}`, W - 52, 26, 17, '#fde68a', 'right', '800');
   rr(W - 42, 12, 30, 28, 8); ctx.fillStyle = '#262a35'; ctx.fill();
   text('☰', W - 27, 26, 16, '#e2e8f0');
@@ -319,6 +377,12 @@ function render() {
     if (e.type === 'pix') {
       const s = e.s * (1 + k * 0.8);
       block(e.x + e.s / 2 - s / 2, e.y + e.s / 2 - s / 2, s, e.color, 1 - k);
+    } else if (e.type === 'grow') {
+      ctx.globalAlpha = 1 - k;
+      ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+      const g = e.s * (0.6 + k * 1.6);
+      ctx.strokeRect(e.x + e.s / 2 - g / 2, e.y + e.s / 2 - g / 2, g, g);
+      ctx.globalAlpha = 1;
     } else if (e.type === 'poof') {
       ctx.globalAlpha = 1 - k;
       ctx.beginPath(); ctx.arc(e.x, e.y, 10 + k * 14, 0, Math.PI * 2);
@@ -392,11 +456,12 @@ function render() {
   }
   if (preview) for (const [x, y] of preview.p.sh) block(preview.gx0 + x * BC, preview.gy0 + y * BC, BC, preview.p.color, 0.95);
 
+  if (mode === 'win' || mode === 'over') drawEnd();
   // toasts
   toasts.forEach((t, i) => {
     const a = t.t < 0.15 ? t.t / 0.15 : t.t > 1.4 ? Math.max(0, (1.8 - t.t) / 0.4) : 1;
     ctx.globalAlpha = a;
-    const y = PIC_Y + PIC / 2 - 26 + i * 30 - t.t * 6;
+    const y = (mode === 'play' ? PIC_Y + PIC / 2 - 26 : 600) + i * 30 - t.t * 6;
     ctx.font = '700 14px system-ui,-apple-system,sans-serif';
     const w = ctx.measureText(t.text).width + 24;
     rr(W / 2 - w / 2, y - 13, w, 26, 13);
@@ -405,81 +470,125 @@ function render() {
     ctx.globalAlpha = 1;
   });
 
-  if (mode === 'win' || mode === 'over') drawEnd();
+
 }
 
 function drawMenu() {
-  text('Pixel Blast', W / 2, 62, 36, '#f8fafc', 'center', '800');
-  text('Pixel Flow × Block Blast — rough prototype', W / 2, 94, 13, '#94a3b8');
+  text('Pixel Blast', W / 2, 54, 34, '#f8fafc', 'center', '800');
+  text('Pixel Flow × Block Blast — rough prototype', W / 2, 84, 13, '#94a3b8');
   const lines = [
-    'Drag blocks onto the board. Fill rows or columns',
-    'to clear them.',
-    'Each cleared block becomes a shot of its color.',
-    'Tap a shooter in the queue to send it around the',
-    'belt. It hits the first pixel it can see — only if',
-    'the colors match.',
-    'Clear the picture to win. Jam the board and you lose.',
+    'Drag blocks onto the board. Fill rows or columns to clear them.',
+    'Each cleared block becomes a shot of its color. Tap a shooter',
+    'to send it around the belt: it hits the first pixel it sees,',
+    'only if the colors match. Clear the picture; don\'t jam the board.',
   ];
-  lines.forEach((l, i) => text(l, W / 2, 122 + i * 17, 12, '#cbd5e1', 'center', '500'));
-  // mode toggle
-  [['Classic', false], ['Sand', true]].forEach(([label, v], i) => {
-    const bx = W / 2 - 104 + i * 108, by = 248, on = sandMode === v;
+  lines.forEach((l, i) => text(l, W / 2, 112 + i * 17, 11.5, '#cbd5e1', 'center', '500'));
+  // mode chips
+  const kinds = [['Classic', 'classic'], ['Sand', 'sand'], ['Boss', 'boss']];
+  kinds.forEach(([label, v], i) => {
+    const bx = W / 2 - 158 + i * 108, by = 192, on = modeKind === v;
     rr(bx, by, 100, 30, 15); ctx.fillStyle = on ? '#fde68a' : '#262a35'; ctx.fill();
     text(label, bx + 50, by + 15, 13, on ? '#111827' : '#cbd5e1', 'center', '800');
-    buttons.push({ x: bx, y: by, w: 100, h: 30, fn: () => { sandMode = v; } });
+    buttons.push({ x: bx, y: by, w: 100, h: 30, fn: () => { modeKind = v; } });
   });
-  if (sandMode) text('Sand: pixels fall · slower belt · no merging shooters', W / 2, 290, 11, '#fde68a', 'center', '600');
+  const hint = { classic: 'Clear the picture before the board jams',
+    sand: 'Sand: pixels fall · slower belt · no merging shooters',
+    boss: 'Boss: the picture regrows pixels — outpace it' }[modeKind];
+  text(hint, W / 2, 236, 11, modeKind === 'classic' ? '#94a3b8' : '#fde68a', 'center', '600');
   // album
-  text(`ALBUM  ${album.size}/${LEVELS.length}  ·  tap a picture to play it`, W / 2, 306, 11, '#94a3b8', 'center', '800');
+  text(`ALBUM  ${album.size}/${LEVELS.length}  ·  tap a picture to play it`, W / 2, 262, 11, '#94a3b8', 'center', '800');
   const perRow = 4, s = 52, gap = 30;
   LEVELS.forEach((lv, i) => {
     const row = Math.floor(i / perRow), col = i % perRow;
     const inRow = Math.min(perRow, LEVELS.length - row * perRow);
     const x0 = (W - (inRow * s + (inRow - 1) * gap)) / 2;
-    const x = x0 + col * (s + gap), y = 324 + row * 88;
+    const x = x0 + col * (s + gap), y = 280 + row * 86;
     const has = album.has(lv.name);
     drawThumb(lv, x, y, s, has);
     text(`${i + 1}. ${lv.name}`, x + s / 2, y + s + 15, 10, has ? '#e2e8f0' : '#64748b', 'center', '700');
     buttons.push({ x: x - 4, y: y - 4, w: s + 8, h: s + 26, fn: () => start(i, false) });
   });
   // wallet + streak
-  const wy = 324 + Math.ceil(LEVELS.length / perRow) * 88;
-  rr(40, wy, W - 80, 58, 14); ctx.fillStyle = '#1a1d25'; ctx.fill();
-  drawCoin(80, wy + 29, 12);
-  text(`${coins} coins`, 100, wy + 29, 16, '#fde68a', 'left', '800');
-  text(`Streak ${streak}`, W - 60, wy + 20, 15, streak > 0 ? '#fb923c' : '#94a3b8', 'right', '800');
-  text(`next win ×${streakMult(streak + 1).toFixed(2).replace(/0$/, '')} coins`, W - 60, wy + 40, 11, '#94a3b8', 'right', '600');
-  text(`Win: ${ECON.winBase}+ coins · Continue: ${ECON.continueCosts.join(' → ')} (max ${ECON.continueCosts.length})`, W / 2, wy + 78, 11.5, '#94a3b8', 'center', '500');
-  const bw = 260, bx = (W - bw) / 2;
+  const wy = 280 + Math.ceil(LEVELS.length / perRow) * 86 - 4;
+  rr(40, wy, W - 80, 50, 14); ctx.fillStyle = '#1a1d25'; ctx.fill();
+  drawCoin(76, wy + 25, 11);
+  text(`${coins} coins`, 94, wy + 25, 15, '#fde68a', 'left', '800');
+  text(`Streak ${streak}`, W - 60, wy + 17, 14, streak > 0 ? '#fb923c' : '#94a3b8', 'right', '800');
+  text(`next win ×${streakMult(streak + 1).toFixed(2).replace(/0$/, '')} coins`, W - 60, wy + 35, 10.5, '#94a3b8', 'right', '600');
+  const bw = 300, bx = (W - bw) / 2;
   const nextIdx = Math.max(0, LEVELS.findIndex(l => !album.has(l.name)));
-  button(`Play next · ${LEVELS[nextIdx].name}`, bx, wy + 100, bw, 52, () => start(nextIdx, false), true);
-  button('Endless', bx, wy + 162, bw, 46, () => start(0, true), false);
-  text('Level editor →', W / 2, wy + 232, 13, '#94a3b8', 'center', '700');
-  buttons.push({ x: W / 2 - 70, y: wy + 220, w: 140, h: 26, fn: () => { location.href = 'tools/editor.html'; } });
+  button(`Play next · ${LEVELS[nextIdx].name}`, bx, wy + 62, bw, 50, () => start(nextIdx, false), true);
+  const hw = (bw - 10) / 2;
+  button('Endless', bx, wy + 122, hw, 46, () => start(0, true), false);
+  button('Sandstorm', bx + hw + 10, wy + 122, hw, 46, () => startStorm(), false);
+  if (bestStorm) text(`best ${Math.floor(bestStorm / 60)}:${String(bestStorm % 60).padStart(2, '0')}`, bx + hw + 10 + hw / 2, wy + 180, 10.5, '#fdba74', 'center', '700');
+  text('Level editor →', W / 2, wy + 204, 13, '#94a3b8', 'center', '700');
+  buttons.push({ x: W / 2 - 70, y: wy + 192, w: 140, h: 26, fn: () => { location.href = 'tools/editor.html'; } });
 }
 
+function drawLink(y) {
+  if (!shareLink) return;
+  ctx.font = '600 10px ui-monospace,Menlo,monospace';
+  let t = shareLink;
+  while (ctx.measureText(t).width > W - 40 && t.length > 20) t = '…' + t.slice(2);
+  text(t, W / 2, y, 10, '#94a3b8', 'center', '600');
+}
 function drawEnd() {
-  ctx.fillStyle = 'rgba(8,10,14,.82)';
+  ctx.fillStyle = 'rgba(8,10,14,.84)';
   ctx.fillRect(0, 0, W, H);
   const win = mode === 'win';
   const bw = 240, x = (W - bw) / 2;
+  // --- sandstorm over ---
+  if (result && result.storm) {
+    text('Buried!', W / 2, 190, 32, '#fdba74', 'center', '800');
+    const m = Math.floor(result.secs / 60), sec = String(result.secs % 60).padStart(2, '0');
+    text(`Survived ${m}:${sec} · ${game.shotsFired} pixels blasted`, W / 2, 236, 15, '#e2e8f0');
+    if (result.isBest) text('New best time!', W / 2, 264, 14, '#a7f3d0', 'center', '700');
+    drawCoin(W / 2 - 44, 296, 10);
+    text(`+${result.earned} coins`, W / 2 - 28, 296, 17, '#fde68a', 'left', '800');
+    button('Try again', x, 340, bw, 52, () => startStorm(), true);
+    button('Menu', x, 404, bw, 52, () => { mode = 'menu'; }, false);
+    return;
+  }
+  // --- duel results ---
+  if (duel) {
+    if (win) {
+      text(result.won ? 'You win the duel!' : 'Duel lost', W / 2, 160, 30, result.won ? '#a7f3d0' : '#fca5a5', 'center', '800');
+      drawThumb(game.level, W / 2 - 40, 192, 80, true);
+      text(`You: ${result.you.moves} moves · ${result.you.secs}s`, W / 2, 304, 16, '#e2e8f0', 'center', '700');
+      text(`Them: ${duel.moves} moves · ${duel.secs}s`, W / 2, 330, 16, '#94a3b8', 'center', '700');
+      button('Send a challenge back', x, 370, bw, 52, () => copyShare(), true);
+      drawLink(438);
+      button('Menu', x, 456, bw, 52, () => { duel = null; mode = 'menu'; }, false);
+    } else {
+      text('Board jammed — duel lost', W / 2, 220, 26, '#fca5a5', 'center', '800');
+      text(`Beat ${duel.moves} moves on ${game.level.name} · no continues in duels`, W / 2, 256, 13, '#94a3b8');
+      button('Retry duel', x, 300, bw, 52, () => startDuel(duel), true);
+      button('Menu', x, 364, bw, 52, () => { duel = null; mode = 'menu'; }, false);
+    }
+    return;
+  }
   if (win) {
-    text('Picture cleared!', W / 2, 150, 30, '#fde68a', 'center', '800');
-    drawThumb(game.level, W / 2 - 45, 182, 90, true);
+    text('Picture cleared!', W / 2, 130, 30, '#fde68a', 'center', '800');
+    drawThumb(game.level, W / 2 - 42, 160, 84, true);
     if (result.test) {
-      text(`Test run · ${game.moves} moves · ${Math.round(game.time)}s`, W / 2, 334, 15, '#e2e8f0');
-      button('Play again', x, 420, bw, 52, () => start(0, false, testLevel), true);
+      text(`Test run · ${game.moves} moves · ${Math.round(game.time)}s`, W / 2, 300, 15, '#e2e8f0');
+      button('Play again', x, 420, bw, 52, () => start(0, false, testLevel, true), true);
       button('Menu', x, 484, bw, 52, () => { mode = 'menu'; }, false);
       return;
     }
-    if (result.isNew) text('New picture added to your album!', W / 2, 300, 14, '#a7f3d0', 'center', '700');
-    drawCoin(W / 2 - 62, 334, 11);
-    text(`+${result.reward} coins`, W / 2 - 44, 334, 20, '#fde68a', 'left', '800');
-    text(`Streak ${streak}  ·  ×${result.mult} multiplier`, W / 2, 366, 14, '#fb923c', 'center', '700');
-    text(`Score ${game.score}  ·  Lines ${game.lines}`, W / 2, 392, 13, '#94a3b8');
+    if (result.isNew) text('New picture added to your album!', W / 2, 266, 14, '#a7f3d0', 'center', '700');
+    drawCoin(W / 2 - 62, 296, 11);
+    text(`+${result.reward} coins`, W / 2 - 44, 296, 20, '#fde68a', 'left', '800');
+    text(`Streak ${streak}  ·  ×${result.mult} multiplier`, W / 2, 326, 14, '#fb923c', 'center', '700');
+    text(`${game.moves} moves · ${Math.round(game.time)}s · score ${game.score}`, W / 2, 350, 13, '#94a3b8');
+    if (!endless) {
+      button('Challenge a friend', x, 376, bw, 46, () => copyShare(), false);
+      drawLink(434);
+    }
     const next = (levelIndex + 1) % LEVELS.length;
-    button(`Next · ${LEVELS[next].name}`, x, 420, bw, 52, () => start(next, false), true);
-    button('Menu', x, 484, bw, 52, () => { mode = 'menu'; }, false);
+    button(`Next · ${LEVELS[next].name}`, x, 452, bw, 52, () => start(next, false), true);
+    button('Menu', x, 514, bw, 46, () => { mode = 'menu'; }, false);
   } else {
     text('Board jammed', W / 2, 200, 30, '#fca5a5', 'center', '800');
     text(`${game.countPixels()} pixels left  ·  Lines ${game.lines}${endless ? `  ·  Pictures ${game.picsCleared}` : ''}`, W / 2, 238, 15, '#e2e8f0');
@@ -500,7 +609,8 @@ function drawEnd() {
         toast('Tray shuffled — keep going!', '#fde68a');
       } });
     }
-    button('Retry', x, 396, bw, 52, () => { leaveRun(); start(levelIndex, endless, testLevel); }, false);
+    // Retry replays exactly the level you just lost (a fresh run for endless)
+    button('Retry', x, 396, bw, 52, () => { const t = !!testLevel, lv = game.level; leaveRun(); if (endless) start(0, true); else start(levelIndex, false, lv, t); }, false);
     button('Menu', x, 460, bw, 52, () => { leaveRun(); mode = 'menu'; }, false);
   }
 }
@@ -568,10 +678,14 @@ function frame(t) {
 }
 
 // Play-test a level sent from the editor (index.html#test)
-if (location.hash === '#test') {
+const dm = location.hash.match(/^#duel-([csb])-(\d+)-(\d+)-(\d+)-(\d+)$/);
+if (dm && LEVELS[+dm[2]]) {
+  startDuel({ kind: LETTER_KIND[dm[1]], idx: +dm[2], seed: +dm[3], moves: +dm[4], secs: +dm[5] });
+  toast(`Duel! Beat ${+dm[4]} moves on ${LEVELS[+dm[2]].name}`, '#a7f3d0');
+} else if (location.hash === '#test') {
   try {
     const lv = JSON.parse(localStorage.getItem('pb-test-level') || 'null');
-    if (lv && lv.rows) { testLevel = lv; start(0, false, lv); }
+    if (lv && lv.rows) start(0, false, lv, true);
   } catch (_) {}
 }
 requestAnimationFrame(frame);
@@ -581,7 +695,9 @@ window.__pb = {
   start: (i, e) => start(i, e),
   launch: i => game.launch(i),
   clearPic: () => { for (const r of game.pic) r.fill(null); },
-  state: () => ({ mode, coins, streak, album: [...album], score: game && game.score, continues: game && game.continues, queue: game && game.queue.length, pixels: game && game.countPixels(), N: game && game.N }),
+  share: () => shareLink,
+  stormState: () => game && ({ status: game.status, t: Math.round(game.time), shots: game.shotsFired, boss: game.bossMode, sand: game.sandMode, seed: game.seed, moves: game.moves }),
+  state: () => ({ level: game && game.level.id, levelIndex, mode, coins, streak, album: [...album], score: game && game.score, continues: game && game.continues, queue: game && game.queue.length, pixels: game && game.countPixels(), N: game && game.N }),
   autoPlace: () => {
     for (let i = 0; i < 3; i++) {
       const p = game.tray[i];
