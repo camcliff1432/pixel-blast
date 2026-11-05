@@ -40,11 +40,13 @@ src/bot.js              heuristic player used for balancing and the editor's dif
 tools/editor.html       level editor + image-to-pixel converter
 sim/balance.js          per-level win-rate report
 sim/economy.js          coin-flow simulation over a play session
+sim/modes.js            Boss and Sandstorm tuning
 docs/BALANCE.md         latest balance + economy numbers
+docs/COCOS_PORT.md      how the port to Cocos Creator goes, phase by phase
 docs/APP_STORE_LISTING.md   draft store copy, keywords, privacy-label notes
 docs/PRIVACY_POLICY.md  draft (template, not legal advice)
 docs/TERMS.md           draft (template, not legal advice)
-ROADMAP.md              plan to the App Store and TikTok Mini Games
+ROADMAP.md              plan to Google Play, the App Store and TikTok
 ```
 
 ## Status

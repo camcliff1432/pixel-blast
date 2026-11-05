@@ -1,80 +1,118 @@
-# Roadmap: prototype → App Store + TikTok Mini Game
+# Roadmap: prototype → Google Play → App Store → TikTok Mini Game
 
-## The key decision: one engine for both
+## Two gates that have nothing to do with code
 
-TikTok no longer accepts HTML mini games. As of August 28, 2026, TikTok Minis requires a native-runtime build made with **Cocos Creator, LayaAir, or Unity**. The current prototype is plain HTML, so it can't ship to TikTok as is.
+Everything downstream waits on these, and both have lead times measured in weeks. Start them before
+writing another line.
 
-**Recommendation: port the game to Cocos Creator (TypeScript).**
+**1. A registered business.** TikTok's Developer Portal requires an organization verified as a
+registered business before you can publish anything or touch monetization. The verification itself
+is reviewed in 1–3 business days; incorporating is not. Apple will let you enrol as an individual,
+though an LLC is what puts a company name on the listing instead of your own.
 
-- One codebase builds to **iOS** (through Xcode) and to a **TikTok mini game** package.
-- It's the closest fit to the current code (2D canvas logic in JS), so an AI-assisted port is realistic.
-- Unity also targets both, but it's heavier for a simple 2D puzzle.
+**2. A game already shipped somewhere else.** TikTok's Industry Qualification Review — the step
+that confirms you are "a legitimate mini games publisher" — asks for *a playable link to
+representative work (a mini game) from another app platform*: Google Play, the App Store, WeChat
+Mini App or Douyin Mini App. If that game belongs to a different entity than the verified business,
+you also need both entities' registration documents sharing a legal representative, or a stamped
+authorization letter from the developing entity.
 
-Fallback for a faster iOS-only release: wrap the existing HTML in **Capacitor**. That gets to the App Store sooner, but you'd still need the Cocos port for TikTok.
+So **TikTok is downstream of a store release, not parallel to it.** It does not ask for a portfolio
+or a track record — one shipped, playable game is the whole bar, and it can be this one.
 
-> **Windows note:** iOS apps must be built and signed with Xcode on macOS. Without a Mac, use a cloud Mac build service (Codemagic, or GitHub Actions macOS runners). Cocos and Capacitor both work with these.
+## The engine decision
+
+TikTok stopped accepting HTML mini games on 28 August 2026, retired the online HTML games on
+4 September and deleted legacy HTML data on 30 September. The supported engines are **Cocos,
+LayaAir and Unity**. The prototype is plain HTML, so it cannot ship there in any form.
+
+**Cocos Creator 3.8.x (TypeScript)**, because one project builds Android, iOS and the TikTok
+package, and because `src/core.js` has no DOM in it and translates almost verbatim. Not COCOS 4 or
+the PinK IDE — both still alpha. Unity also targets both but is heavy for a 2D puzzle, and its
+larger TikTok size budget (60 MB vs 30 MB) is generous precisely because the engine is big.
+
+The full port plan, phase by phase with a regression test, is in
+**[docs/COCOS_PORT.md](docs/COCOS_PORT.md)**.
+
+> **Windows note:** Android builds fine from Windows. iOS must be built and signed with Xcode on
+> macOS — use a cloud Mac (Codemagic, or GitHub Actions macOS runners) when the time comes.
 
 ---
 
-## Phase 0 — Validate the fun (now)
-- [ ] Play all 5 levels on a phone and note where it feels slow, unfair, or confusing
-- [ ] Get 5–10 friends to play the shared link and watch where they get stuck
-- [ ] Tune: ammo per block, combo multiplier, queue size (6), belt capacity (5), coin rewards
-- [ ] Decide on the final name (check the App Store for conflicts with "Pixel Blast")
+## Track A — paperwork, running in the background from day one
 
-## Phase 1 — Production game design
-- [ ] 30–50 levels with a difficulty curve (new mechanic every ~10 levels: locked pixels, stone blocks, 2-color shooters…)
-- [ ] Level format as data (JSON) so levels are easy to add
-- [ ] Meta: album chapters, win-streak multiplier, boosters, daily puzzle
-- [ ] Monetization plan: rewarded ads (continue, extra booster) + optional coin packs + "remove ads"
-- [ ] Original art style and sound (no copied assets from Pixel Flow or Block Blast)
+- [ ] Decide the final name (the App Store almost certainly has a "Pixel Blast"; see [docs/APP_STORE_LISTING.md](docs/APP_STORE_LISTING.md))
+- [ ] Register the business entity
+- [ ] **Apple Developer Program**: enrol, $99/year — the slowest of the lot, and nothing else unblocks it
+- [ ] **Google Play Console**: $25 one-time. Check the current closed-testing rule for new accounts; it has applied to personal accounts and not to organizations
+- [ ] **TikTok for Developers**: organization → business verification → app record
+- [ ] Privacy policy and Terms on reachable public URLs. GitHub Pages needs a paid plan on a private repo, so either flip this repo public or host the two pages in a small public one
+- [ ] Support URL and contact email
+- [ ] Ad network account if using ads (AdMob/AppLovin on the stores; TikTok uses its own)
 
-## Phase 2 — Port to Cocos Creator
-- [ ] Install Cocos Creator (Windows is fine for development)
-- [ ] Rebuild: board, tray drag-and-drop, belt/shooters, picture grid, queue, UI screens
-- [ ] Save system (local storage via Cocos `sys.localStorage`)
-- [ ] Audio, haptics, animations/juice
-- [ ] Test the web build in a browser, then on devices
+## Track B — the game
 
-## Phase 3 — Accounts and legal (do early; some take days)
-- [ ] **Apple Developer Program**: enroll (individual, or as an LLC to show a company name), $99/year
-- [ ] **TikTok for Developers**: account → create an *organization* → create an *app* in the Developer Portal
-- [ ] Privacy policy page and Terms of Service page (hosted URLs; TikTok's review checks for a Terms URL)
-- [ ] Support URL / contact email
-- [ ] Ad network account if using ads (e.g. AdMob/AppLovin for iOS; TikTok uses its own rewarded-ad APIs)
+### Phase 0 — Validate the fun (now, in the HTML build)
+- [ ] Play all seven levels on a phone; note where it feels slow, unfair or confusing
+- [ ] Get 5–10 friends on the shared link and watch where they get stuck
+- [ ] Decide whether the loop holds attention *before* paying for the port and 40 levels
 
-## Phase 4 — iOS / App Store
-- [ ] Get a Mac or set up cloud builds (Codemagic / GitHub Actions)
-- [ ] Build the iOS project from Cocos → open in Xcode → set bundle ID, signing, app icon, launch screen
-- [ ] App Store Connect: create the app record (name, subtitle, category: Games → Puzzle)
-- [ ] Screenshots (6.9" and 6.5" iPhone sizes at minimum), description, keywords
-- [ ] Age rating questionnaire, App Privacy ("nutrition label") answers (ads SDKs collect data!)
-- [ ] If ads track users: App Tracking Transparency prompt
-- [ ] In-app purchases set up in App Store Connect (if any)
-- [ ] **TestFlight** beta with friends
-- [ ] Submit for review (watch out for guideline 4.3 "spam/copycat": originality matters in this crowded genre)
+### Phase 1 — Port to Cocos, while the game is small
+Follow [docs/COCOS_PORT.md](docs/COCOS_PORT.md). 750 lines translate, 733 get rebuilt, the editor
+stays a plain web page. Every screen added to `index.html` before this is a screen built twice.
 
-## Phase 5 — TikTok Mini Game
-- [ ] Build the TikTok mini game package from Cocos (adapt the entry file, package structure, platform config)
-- [ ] Integrate the platform requirements: `minigame.config.json`, Mini Games SDK initialization, **TikTok Login**
-- [ ] Rewarded ads through TikTok's monetization (enable monetization in the Developer Portal)
-- [ ] Debug on a real phone with **TikTok DevTool**
-- [ ] Upload the code package → preview in TikTok → submit for review
-- [ ] Once Live: promote with short-form gameplay clips (the belt-clearing moment is very clip-friendly)
+### Phase 2 — Production game design
+- [ ] 30–50 levels with a real curve (today: 41–74% bot win rate, drifting with pixel count rather than designed — see [docs/BALANCE.md](docs/BALANCE.md))
+- [ ] Level 1 at about 95%, not 74%
+- [ ] A new mechanic every ~10 levels: locked pixels, stone blocks, 2-color shooters
+- [ ] Original art style and sound — **there is no audio at all today**, and the art is placeholder
+- [ ] Meta: album chapters, boosters, daily puzzle (Duel's seeded piece order already does what a daily needs)
+- [ ] Monetization: rewarded ads on continue, coin packs, remove-ads
 
-## Phase 6 — Launch and live ops
-- [ ] Analytics: level funnel (where players quit), retention D1/D7, ad views
-- [ ] Weekly content: new pictures/album chapters, events
-- [ ] Iterate on difficulty from the funnel data
+This phase, not the port, is the long pole — and it is what App Store guideline 4.3 looks at.
+
+### Phase 3 — Google Play (Android) · *this is the TikTok ticket*
+- [ ] Android build from Cocos, on Windows, no Mac needed
+- [ ] Store listing, content rating, data safety form
+- [ ] Closed test if required, then production
+- [ ] **Once live, that store link unlocks TikTok's Industry Qualification Review** — submit it immediately, it is a one-time check
+
+### Phase 4 — iOS / App Store
+- [ ] Cloud macOS build, or a Mac
+- [ ] Xcode: bundle ID, signing, app icon, launch screen
+- [ ] App Store Connect record (Games → Puzzle, secondary Casual)
+- [ ] Screenshots at 6.9" and 6.5", description, keywords
+- [ ] Age rating and App Privacy answers (ad SDKs collect data), ATT prompt if anything tracks
+- [ ] TestFlight with friends, then submit — watch for 4.3 in a crowded genre
+
+### Phase 5 — TikTok Mini Game
+- [ ] Industry Qualification Review (needs Phase 3), plus General and U.S. Launch Approval
+- [ ] Basic information submitted and approved — mandatory before any version review
+- [ ] Build the **Douyin Mini Game** target in Cocos, then hand-adjust the entry file, package structure and resource loading; there is no TikTok build target
+- [ ] `minigame.config.json` and Mini Games SDK init
+- [ ] Required capabilities, which are more than login: **silent login, in-app ads, in-app purchases, home screen shortcut, revisit from profile**. Monetization is an integration requirement here, not a later decision
+- [ ] Stay under **30 MB total / 4 MB main package** (non-Unity). Pictures are text rows, so 50 levels is about 50 KB — the engine and the audio are the entire budget
+- [ ] No zero-byte files in the package, and no dynamically imported scripts from unrestricted sources; the code scan rejects both
+- [ ] Debug on a real phone with TikTok DevTool, upload the package, preview in TikTok, submit
+- [ ] Set up invoicing: payouts run through revenue settlement statements you confirm and invoice against
+
+### Phase 6 — Launch and live ops
+- [ ] Analytics: level funnel, D1/D7 retention, ad views
+- [ ] Weekly content: new pictures and album chapters
+- [ ] Tune difficulty from funnel data, not from the bot
+- [ ] Promote with short-form clips — the belt-clearing moment is the shot
 
 ## References
-- TikTok: [How to develop TikTok Mini Games](https://ads.tiktok.com/help/article/how-to-develop-tiktok-mini-games?lang=en)
+
+- TikTok: [Mini Games Integration Workflow](https://developers.tiktok.com/docs/en/mini-games-integration-workflow)
+- TikTok: [Industry Qualification Review](https://developers.tiktok.com/docs/en/industry-qualification-review)
+- TikTok: [Verify Your Business](https://developers.tiktok.com/docs/en/verify-your-business)
+- TikTok: [Release Your Mini Game](https://developers.tiktok.com/docs/en/submit-your-app-for-review)
 - TikTok: [Mini Games Technical Overview](https://developers.tiktok.com/docs/en/mini-games-technical-overview)
 - TikTok: [Migrate from HTML to Native Runtime](https://developers.tiktok.com/docs/en/migrate-from-html-to-native-runtime)
 - TikTok: [Build Mini Games With Cocos](https://developers.tiktok.com/docs/en/build-mini-games-with-cocos)
-- TikTok: [Publication stage requirements](https://developers.tiktok.com/doc/mini-games-publication-stage)
-- Apple: [App Store Review Guidelines](https://developer.apple.com/app-store/review/guidelines/)
-- Apple: [Apple Developer Program](https://developer.apple.com/programs/)
+- Cocos: [Publish to Douyin Mini Games](https://docs.cocos.com/creator/manual/en/editor/publish/publish-bytedance-mini-game.html)
+- Apple: [App Store Review Guidelines](https://developer.apple.com/app-store/review/guidelines/) · [Apple Developer Program](https://developer.apple.com/programs/)
 
 ---
 
