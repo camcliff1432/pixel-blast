@@ -42,6 +42,7 @@ sim/balance.js          per-level win-rate report
 sim/economy.js          coin-flow simulation over a play session
 sim/modes.js            Boss and Sandstorm tuning
 docs/BALANCE.md         latest balance + economy numbers
+docs/PLAYTEST.md        what to watch for in a Phase 0 playtest
 docs/COCOS_PORT.md      how the port to Cocos Creator goes, phase by phase
 docs/APP_STORE_LISTING.md   draft store copy, keywords, privacy-label notes
 docs/PRIVACY_POLICY.md  draft (template, not legal advice)
