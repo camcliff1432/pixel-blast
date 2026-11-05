@@ -52,7 +52,7 @@ const TRAY_Y = 680, TRAY_CELL = 20;
 
 // ---------- state ----------
 let mode = 'menu', game = null, levelIndex = 0, endless = false, testLevel = null;
-let modeKind = 'classic';   // 'classic' | 'sand' | 'boss' (applies to album levels and endless)
+let modeKind = 'classic';   // 'classic' | 'sand' | 'boss' | 'strict' | 'duel' (album levels and endless)
 let storm = false;          // sandstorm run
 let duel = null;            // { kind, idx, seed, moves, secs } when playing a challenge link
 let shareLink = '', bestStorm = 0, autoLaunch = false;
@@ -76,7 +76,8 @@ function start(idx, isEndless, level, isTest) {
   levelIndex = idx;
   storm = false; duel = null; shareLink = '';
   const lv = level || (isEndless ? LEVELS[Math.floor(Math.random() * LEVELS.length)] : LEVELS[idx]);
-  game = new Game(lv, { sand: modeKind === 'sand', boss: modeKind === 'boss', strictQueue: modeKind === 'strict', autoLaunch });
+  // Duel runs use the seeded piece sequence, so two players on one seed get the same trays.
+  game = new Game(lv, { sand: modeKind === 'sand', boss: modeKind === 'boss', strictQueue: modeKind === 'strict', fairPieces: modeKind === 'duel', autoLaunch });
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
@@ -102,17 +103,18 @@ function startStorm() {
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
-const KIND_LETTER = { classic: 'c', sand: 's', boss: 'b', strict: 't' }, LETTER_KIND = { c: 'classic', s: 'sand', b: 'boss', t: 'strict' };
+const KIND_LETTER = { classic: 'c', sand: 's', boss: 'b', strict: 't', duel: 'd' }, LETTER_KIND = { c: 'classic', s: 'sand', b: 'boss', t: 'strict', d: 'duel' };
 function startDuel(d) {
   testLevel = null; endless = false; storm = false; shareLink = '';
   levelIndex = d.idx;
-  game = new Game(LEVELS[d.idx], { seed: d.seed, sand: d.kind === 'sand', boss: d.kind === 'boss', strictQueue: d.kind === 'strict', autoLaunch });
+  // Always fair: a received challenge has to be the same game the other player got.
+  game = new Game(LEVELS[d.idx], { seed: d.seed, sand: d.kind === 'sand', boss: d.kind === 'boss', strictQueue: d.kind === 'strict', fairPieces: true, autoLaunch });
   duel = d;
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
 function makeShareLink() {
-  const kind = game.bossMode ? 'boss' : game.sandMode ? 'sand' : game.cfg.strictQueue ? 'strict' : 'classic';
+  const kind = game.cfg.fairPieces ? 'duel' : game.bossMode ? 'boss' : game.sandMode ? 'sand' : game.cfg.strictQueue ? 'strict' : 'classic';
   return location.href.split('#')[0] + `#duel-${KIND_LETTER[kind]}-${levelIndex}-${game.seed}-${game.moves}-${Math.round(game.time)}`;
 }
 function copyShare() {
@@ -341,7 +343,7 @@ function render() {
   const n = N(), pc = PC();
 
   // HUD
-  const prefix = storm ? '' : (duel ? 'Duel · ' : '') + (game.bossMode ? 'Boss · ' : game.sandMode ? 'Sand · ' : game.cfg.strictQueue ? 'Strict · ' : '');
+  const prefix = storm ? '' : (duel || game.cfg.fairPieces ? 'Duel · ' : '') + (game.bossMode ? 'Boss · ' : game.sandMode ? 'Sand · ' : game.cfg.strictQueue ? 'Strict · ' : '');
   const title = storm ? 'Sandstorm' : prefix + (testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : game.level.name);
   text(title, 16, 22, 16, '#f1f5f9', 'left', '700');
   const t = Math.floor(game.time), clock = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
@@ -493,9 +495,9 @@ function drawMenu() {
   ];
   lines.forEach((l, i) => text(l, W / 2, 112 + i * 17, 11.5, '#cbd5e1', 'center', '500'));
   // mode chips
-  const kinds = [['Classic', 'classic'], ['Sand', 'sand'], ['Boss', 'boss'], ['Strict', 'strict']];
+  const kinds = [['Classic', 'classic'], ['Sand', 'sand'], ['Boss', 'boss'], ['Strict', 'strict'], ['Duel', 'duel']];
   kinds.forEach(([label, v], i) => {
-    const cw = 84, bx = (W - (4 * cw + 3 * 6)) / 2 + i * (cw + 6), by = 192, on = modeKind === v;
+    const cw = 68, bx = (W - (kinds.length * cw + (kinds.length - 1) * 6)) / 2 + i * (cw + 6), by = 192, on = modeKind === v;
     rr(bx, by, cw, 30, 15); ctx.fillStyle = on ? '#fde68a' : '#262a35'; ctx.fill();
     text(label, bx + cw / 2, by + 15, 13, on ? '#111827' : '#cbd5e1', 'center', '800');
     buttons.push({ x: bx, y: by, w: cw, h: 30, fn: () => { modeKind = v; } });
@@ -503,7 +505,8 @@ function drawMenu() {
   const hint = { classic: 'Clear the picture before the board jams',
     sand: 'Sand: pixels fall · slower belt · no merging shooters',
     boss: 'Boss: the picture regrows pixels — outpace it',
-    strict: 'Strict: 4-slot queue — if it\'s full, you can\'t clear lines' }[modeKind];
+    strict: 'Strict: 4-slot queue — if it\'s full, you can\'t clear lines',
+    duel: 'Duel: fixed piece order — win, then challenge a friend to beat it' }[modeKind];
   text(hint, W / 2, 232, 11, modeKind === 'classic' ? '#94a3b8' : '#fde68a', 'center', '600');
   // setting: auto-launch
   {
@@ -602,9 +605,13 @@ function drawEnd() {
     text(`+${result.reward} coins`, W / 2 - 44, 296, 20, '#fde68a', 'left', '800');
     text(`Streak ${streak}  ·  ×${result.mult} multiplier`, W / 2, 326, 14, '#fb923c', 'center', '700');
     text(`${game.moves} moves · ${Math.round(game.time)}s · score ${game.score}`, W / 2, 350, 13, '#94a3b8');
-    if (!endless) {
+    // Only a Duel run can be challenged: elsewhere the piece order follows the picture as you
+    // clear it, so your friend would be playing a different game from the same seed.
+    if (!endless && game.cfg.fairPieces) {
       button('Challenge a friend', x, 376, bw, 46, () => copyShare(), false);
       drawLink(434);
+    } else if (!endless) {
+      text('Play this level in Duel mode to challenge a friend', W / 2, 392, 11.5, '#64748b', 'center', '600');
     }
     const next = (levelIndex + 1) % LEVELS.length;
     button(`Next · ${LEVELS[next].name}`, x, 452, bw, 52, () => start(next, false), true);
@@ -698,7 +705,7 @@ function frame(t) {
 }
 
 // Play-test a level sent from the editor (index.html#test)
-const dm = location.hash.match(/^#duel-([csbt])-(\d+)-(\d+)-(\d+)-(\d+)$/);
+const dm = location.hash.match(/^#duel-([csbtd])-(\d+)-(\d+)-(\d+)-(\d+)$/);
 if (dm && LEVELS[+dm[2]]) {
   startDuel({ kind: LETTER_KIND[dm[1]], idx: +dm[2], seed: +dm[3], moves: +dm[4], secs: +dm[5] });
   toast(`Duel! Beat ${+dm[4]} moves on ${LEVELS[+dm[2]].name}`, '#a7f3d0');

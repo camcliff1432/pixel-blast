@@ -88,7 +88,7 @@ Fallback for a faster iOS-only release: wrap the existing HTML in **Capacitor**.
 - **Sandstorm:** endless survival on a 12×12 dune. New sand pixels rain in faster and faster; a jam doesn't end the run but triggers a 6-pixel sand surge; you lose when a column fills to the top. Best time is saved.
 - **Strict:** a 4-slot queue with no same-color merging. If a clear would create more shooters than there are free slots, the block goes back to your hand and the rows that would clear glow red while you drag. You have to launch shooters to make room.
 - **Auto-launch (setting):** shooters leave the queue by themselves, oldest first, whenever the belt has room. Toggle it on the menu or by tapping the label above the queue mid-game; it's saved. Works in every mode. Bot win rates are within a few points of careful manual launching.
-- **Async Duel:** after a win, "Challenge a friend" copies a link with the level, mode and seed. Your friend gets the same piece order, no continues, and has to beat your move count (time breaks ties). No server needed.
+- **Duel:** a mode on the menu. Pieces come from the seed instead of from how the run is going, so the same seed deals the same trays at the same move numbers to both players. Win one and "Challenge a friend" copies a link with the level and seed; your friend plays that exact game, with no continues, and has to beat your move count (time breaks ties). No server needed. It costs about 14 points of win rate against the normal adaptive piece order (see [docs/BALANCE.md](docs/BALANCE.md)), which is why it is its own mode rather than the rule everywhere.
 
 **Ideas, roughly by effort (small → big)**
 | Mode | How it plays | Why it's interesting |

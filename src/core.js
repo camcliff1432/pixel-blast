@@ -63,11 +63,13 @@
     stormAccel: 0.99,   // interval multiplier after each new pixel (speeds up)
     stormMin: 0.2,      // fastest interval (bot survives ~3.5 min median with these)
     stormSurge: 6,      // sandstorm: a jammed board reshuffles the tray but drops this many extra pixels
-    // Pieces come from a seeded sequence that does not depend on how the run is going, so the same
-    // seed gives the same trays at the same move numbers (duels, daily puzzles, reproducible bot runs).
-    // Colors are still weighted toward what the picture needs, but frozen at the picture's start.
-    // Set false for the old adaptive pick (re-weighted every piece from the live picture and queue).
-    fairPieces: true,
+    // Duel mode. Pieces come from a seeded sequence that does not depend on how the run is going,
+    // so the same seed gives the same trays at the same move numbers, and two players can be
+    // compared. Colors stay weighted toward the picture, but frozen at its start instead of
+    // re-read after every shot, which costs the bot ~13 points of win rate (see docs/BALANCE.md).
+    // Off here, so normal play keeps the adaptive pick; index.html turns it on for Duel runs.
+    // Also turn it on to replay a run exactly: same seed + same moves = same game.
+    fairPieces: false,
   };
 
   function rngFrom(seed) {
