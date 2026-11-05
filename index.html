@@ -56,10 +56,14 @@ const TRAY_Y = 680, TRAY_CELL = 20;
 
 // ---------- state ----------
 let mode = 'menu', game = null, levelIndex = 0, endless = false, testLevel = null;
-let modeKind = 'classic';   // 'classic' | 'sand' | 'boss' | 'strict' | 'duel' (album levels and endless)
+let modeKind = 'classic';   // 'classic' | 'sand' | 'boss' | 'strict' | 'duel' | 'line' | 'aim'
+const AIMY = new Set(['line', 'aim']); // modes where you choose the shot instead of riding the belt
 let storm = false;          // sandstorm run
 let duel = null;            // { kind, idx, seed, moves, secs } when playing a challenge link
 let shareLink = '', bestStorm = 0, autoLaunch = false;
+let selQ = -1;              // Line/Aim: which queued shooter is armed
+let aimDrag = null;         // Aim: { x, y } current drag point while setting an angle
+let hoverSlot = null;       // Line: the edge slot under the pointer, previewed before you commit
 let fallOff = new Map(); // sand mode: 'x,y' -> remaining fall distance in cells (negative)
 let effects = [], projs = [], toasts = [], drag = null, buttons = [], time = 0, winDelay = 0;
 let coins = ECON.startCoins, streak = 0, album = new Set(), result = null;
@@ -81,7 +85,9 @@ function start(idx, isEndless, level, isTest) {
   storm = false; duel = null; shareLink = '';
   const lv = level || (isEndless ? LEVELS[Math.floor(Math.random() * LEVELS.length)] : LEVELS[idx]);
   // Duel runs use the seeded piece sequence, so two players on one seed get the same trays.
-  game = new Game(lv, { sand: modeKind === 'sand', boss: modeKind === 'boss', strictQueue: modeKind === 'strict', fairPieces: modeKind === 'duel', autoLaunch });
+  game = new Game(lv, { sand: modeKind === 'sand', boss: modeKind === 'boss', strictQueue: modeKind === 'strict', fairPieces: modeKind === 'duel',
+    lineAim: modeKind === 'line', freeAim: modeKind === 'aim', autoLaunch: autoLaunch && modeKind !== 'line' && modeKind !== 'aim' });
+  selQ = -1; aimDrag = null;
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
@@ -146,6 +152,41 @@ function posXY(p) {
   const [x1, y1] = slotXY(a), [x2, y2] = slotXY(a + 1);
   return [x1 + (x2 - x1) * f, y1 + (y2 - y1) * f];
 }
+// Screen point -> picture cell coordinates (continuous, 0..N).
+function picCoords(x, y) { const pc = PC(); return [(x - PIC_X) / pc, (y - PIC_Y) / pc]; }
+// Line mode: which edge slot does a tap mean? Nearest edge decides the direction,
+// the position along it decides the row or column. See scanTarget() for the slot layout.
+function slotFromPoint(x, y) {
+  const n = N();
+  const [cx, cy] = picCoords(x, y);
+  if (cx < -1.2 || cy < -1.2 || cx > n + 1.2 || cy > n + 1.2) return null;
+  const c = Math.max(0, Math.min(n - 1, Math.floor(cx))), r = Math.max(0, Math.min(n - 1, Math.floor(cy)));
+  const d = [cy, n - cy, cx, n - cx];               // top, bottom, left, right
+  const m = d.indexOf(Math.min(...d));
+  if (m === 0) return c;                             // from the top, down column c
+  if (m === 1) return 2 * n + (n - 1 - c);           // from the bottom, up column c
+  if (m === 2) return 3 * n + (n - 1 - r);           // from the left, along row r
+  return n + r;                                      // from the right, along row r
+}
+// The cells a shot from this slot would sweep, nearest first.
+function slotLine(slot) {
+  const n = N(), side = Math.floor(slot / n), k = slot % n, out = [];
+  for (let s = 0; s < n; s++) {
+    if (side === 0) out.push([k, s]);
+    else if (side === 1) out.push([n - 1 - s, k]);
+    else if (side === 2) out.push([n - 1 - k, n - 1 - s]);
+    else out.push([s, n - 1 - k]);
+  }
+  return out;
+}
+function aimAngleTo(x, y) {
+  const pc = PC();
+  const lx = PIC_X + game.launchX * pc, ly = PIC_Y + PIC;
+  let a = Math.atan2(y - ly, x - lx);
+  if (a > -0.12) a = -0.12;                          // keep it pointing into the picture
+  if (a < -Math.PI + 0.12) a = -Math.PI + 0.12;
+  return a;
+}
 
 // ---------- events from the core ----------
 function handleEvents() {
@@ -164,6 +205,15 @@ function handleEvents() {
         fallOff.delete(`${f.x},${f.from}`);
         fallOff.set(`${f.x},${f.to}`, prev + (f.from - f.to));
       }
+    } else if (e.type === 'ballHit') {
+      const pc = PC();
+      effects.push({ type: 'pix', x: PIC_X + e.x * pc, y: PIC_Y + e.y * pc, s: pc, color: e.pcolor, t: 0 });
+    } else if (e.type === 'ballBounce') {
+      const pc = PC();
+      effects.push({ type: 'ping', x: PIC_X + e.bx * pc, y: PIC_Y + e.by * pc, t: 0 });
+    } else if (e.type === 'spentAt') {
+      const [x, y] = slotXY(e.slot);
+      effects.push({ type: 'poof', x, y, color: e.color, t: 0 });
     } else if (e.type === 'spent') {
       const [x, y] = posXY(e.pos);
       effects.push({ type: 'poof', x, y, color: e.color, t: 0 });
@@ -347,7 +397,8 @@ function render() {
   const n = N(), pc = PC();
 
   // HUD
-  const prefix = storm ? '' : (duel || game.cfg.fairPieces ? 'Duel · ' : '') + (game.bossMode ? 'Boss · ' : game.sandMode ? 'Sand · ' : game.cfg.strictQueue ? 'Strict · ' : '');
+  const prefix = storm ? '' : (duel || game.cfg.fairPieces ? 'Duel · ' : '') + (game.cfg.lineAim ? 'Line · ' : game.cfg.freeAim ? 'Aim · ' : '')
+    + (game.bossMode ? 'Boss · ' : game.sandMode ? 'Sand · ' : game.cfg.strictQueue ? 'Strict · ' : '');
   const title = storm ? 'Sandstorm' : prefix + (testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : game.level.name);
   text(title, 16, 22, 16, '#f1f5f9', 'left', '700');
   const t = Math.floor(game.time), clock = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
@@ -394,6 +445,11 @@ function render() {
       const g = e.s * (0.6 + k * 1.6);
       ctx.strokeRect(e.x + e.s / 2 - g / 2, e.y + e.s / 2 - g / 2, g, g);
       ctx.globalAlpha = 1;
+    } else if (e.type === 'ping') {
+      ctx.globalAlpha = (1 - k) * 0.7;
+      ctx.beginPath(); ctx.arc(e.x, e.y, 2 + k * 9, 0, Math.PI * 2);
+      ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1.5; ctx.stroke();
+      ctx.globalAlpha = 1;
     } else if (e.type === 'poof') {
       ctx.globalAlpha = 1 - k;
       ctx.beginPath(); ctx.arc(e.x, e.y, 10 + k * 14, 0, Math.PI * 2);
@@ -408,6 +464,58 @@ function render() {
   }
   for (const s of game.belt) { const [x, y] = posXY(s.pos); shooter(x, y, 10, s.color, s.ammo); }
 
+  // ----- Line mode: emplaced shooters, and the line you are about to pick -----
+  if (game.cfg.lineAim) {
+    if (selQ >= 0 && selQ < game.queue.length && drag === null) {
+      const slot = hoverSlot != null ? hoverSlot : null;
+      if (slot != null) {
+        const q = game.queue[selQ];
+        for (const [cx, cy] of slotLine(slot)) {
+          const hit = game.pic[cy][cx];
+          rr(PIC_X + cx * pc + 1, PIC_Y + cy * pc + 1, pc - 2, pc - 2, Math.min(5, pc * 0.2));
+          ctx.fillStyle = hit ? (hit === q.color || q.color === RAINBOW ? 'rgba(167,243,208,.55)' : 'rgba(255,255,255,.10)') : 'rgba(167,243,208,.18)';
+          ctx.fill();
+          if (hit) break; // the first pixel in the way is what you actually hit
+        }
+        const [sx, sy] = slotXY(slot);
+        ctx.beginPath(); ctx.arc(sx, sy, 13, 0, Math.PI * 2);
+        ctx.strokeStyle = '#a7f3d0'; ctx.lineWidth = 2; ctx.stroke();
+      }
+    }
+    for (const e of game.emplaced) {
+      const [x, y] = slotXY(e.slot);
+      shooter(x, y, 11, e.color, e.ammo);
+      const t = slotLine(e.slot).find(([cx, cy]) => game.pic[cy][cx]);
+      if (t) {
+        ctx.globalAlpha = 0.35 + 0.25 * Math.sin(time * 9);
+        ctx.strokeStyle = COL[e.color]; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(PIC_X + (t[0] + 0.5) * pc, PIC_Y + (t[1] + 0.5) * pc); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+  }
+
+  // ----- Aim mode: launcher, aiming ray, balls in flight -----
+  if (game.cfg.freeAim) {
+    const lx = PIC_X + game.launchX * pc, ly = PIC_Y + PIC;
+    ctx.beginPath(); ctx.arc(lx, ly, 7, Math.PI, 0); ctx.fillStyle = '#334155'; ctx.fill();
+    ctx.beginPath(); ctx.arc(lx, ly, 3.5, 0, Math.PI * 2); ctx.fillStyle = '#94a3b8'; ctx.fill();
+    if (aimDrag && selQ >= 0 && selQ < game.queue.length) {
+      const a = aimAngleTo(aimDrag.x, aimDrag.y), q = game.queue[selQ];
+      ctx.save(); ctx.setLineDash([5, 7]);
+      ctx.strokeStyle = COL[q.color]; ctx.lineWidth = 2; ctx.globalAlpha = 0.9;
+      ctx.beginPath(); ctx.moveTo(lx, ly);
+      ctx.lineTo(lx + Math.cos(a) * 420, ly + Math.sin(a) * 420);
+      ctx.stroke(); ctx.restore();
+      shooter(lx, ly - 18, 12, q.color, q.ammo);
+    }
+    for (const b of game.balls) {
+      const x = PIC_X + b.x * pc, y = PIC_Y + b.y * pc;
+      ctx.beginPath(); ctx.arc(x, y, 4.5, 0, Math.PI * 2); ctx.fillStyle = '#fff'; ctx.fill();
+      ctx.beginPath(); ctx.arc(x, y, 3, 0, Math.PI * 2); ctx.fillStyle = COL[b.color]; ctx.fill();
+    }
+  }
+
   // side columns
   drawCoin(33, 104, 11);
   text(String(coins), 33, 128, 15, '#fde68a', 'center', '800');
@@ -418,15 +526,27 @@ function render() {
   drawBooster('shuffle', 340, 168);
 
   // queue
-  const lbl = game.cfg.autoLaunch ? `AUTO-LAUNCH ON  ·  BELT ${game.belt.length}/${game.beltCap}  ·  tap to switch off`
-    : `TAP A SHOOTER TO LAUNCH  ·  BELT ${game.belt.length}/${game.beltCap}  ·  auto: off`;
-  text(lbl, W / 2, 335, 10, game.cfg.autoLaunch ? '#a7f3d0' : '#64748b', 'center', '700');
-  buttons.push({ x: 20, y: 326, w: W - 40, h: 18, fn: () => { autoLaunch = !autoLaunch; game.cfg.autoLaunch = autoLaunch; saveMeta(); toast(autoLaunch ? 'Auto-launch on: shooters go by themselves' : 'Auto-launch off: tap shooters to launch', '#e2e8f0'); } });
+  if (game.cfg.lineAim) {
+    text(selQ >= 0 ? 'NOW TAP AN EDGE — IT FIRES DOWN THAT ROW OR COLUMN' : 'TAP A SHOOTER TO ARM IT',
+      W / 2, 335, 10, selQ >= 0 ? '#a7f3d0' : '#64748b', 'center', '700');
+  } else if (game.cfg.freeAim) {
+    text(selQ >= 0 ? 'DRAG FROM THE PICTURE TO AIM  ·  RELEASE TO FIRE' : game.volleyActive() ? 'VOLLEY IN FLIGHT…' : 'TAP A SHOOTER TO ARM IT',
+      W / 2, 335, 10, selQ >= 0 ? '#a7f3d0' : '#64748b', 'center', '700');
+  } else {
+    const lbl = game.cfg.autoLaunch ? `AUTO-LAUNCH ON  ·  BELT ${game.belt.length}/${game.beltCap}  ·  tap to switch off`
+      : `TAP A SHOOTER TO LAUNCH  ·  BELT ${game.belt.length}/${game.beltCap}  ·  auto: off`;
+    text(lbl, W / 2, 335, 10, game.cfg.autoLaunch ? '#a7f3d0' : '#64748b', 'center', '700');
+    buttons.push({ x: 20, y: 326, w: W - 40, h: 18, fn: () => { autoLaunch = !autoLaunch; game.cfg.autoLaunch = autoLaunch; saveMeta(); toast(autoLaunch ? 'Auto-launch on: shooters go by themselves' : 'Auto-launch off: tap shooters to launch', '#e2e8f0'); } });
+  }
   for (let i = 0; i < QN(); i++) {
     const x = QX() + i * (QW + QG);
     rr(x, QY, QW, QH, 10);
     ctx.fillStyle = i < game.queue.length ? '#262a35' : '#1a1d25';
     ctx.fill();
+    if (i === selQ && i < game.queue.length) {
+      rr(x - 2, QY - 2, QW + 4, QH + 4, 12);
+      ctx.strokeStyle = '#a7f3d0'; ctx.lineWidth = 2; ctx.stroke();
+    }
     if (i < game.queue.length) shooter(x + QW / 2, QY + QH / 2, 15, game.queue[i].color, game.queue[i].ammo);
   }
 
@@ -499,41 +619,49 @@ function drawMenu() {
   ];
   lines.forEach((l, i) => text(l, W / 2, 112 + i * 17, 11.5, '#cbd5e1', 'center', '500'));
   // mode chips
-  const kinds = [['Classic', 'classic'], ['Sand', 'sand'], ['Boss', 'boss'], ['Strict', 'strict'], ['Duel', 'duel']];
-  kinds.forEach(([label, v], i) => {
-    const cw = 68, bx = (W - (kinds.length * cw + (kinds.length - 1) * 6)) / 2 + i * (cw + 6), by = 192, on = modeKind === v;
-    rr(bx, by, cw, 30, 15); ctx.fillStyle = on ? '#fde68a' : '#262a35'; ctx.fill();
-    text(label, bx + cw / 2, by + 15, 13, on ? '#111827' : '#cbd5e1', 'center', '800');
-    buttons.push({ x: bx, y: by, w: cw, h: 30, fn: () => { modeKind = v; } });
+  // Seven modes over two rows. Row 2 is the new shooting models.
+  const rows = [[['Classic', 'classic'], ['Sand', 'sand'], ['Boss', 'boss'], ['Strict', 'strict']],
+                [['Duel', 'duel'], ['Line', 'line'], ['Aim', 'aim']]];
+  rows.forEach((kinds, r) => {
+    const cw = r === 0 ? 84 : 94, by = 184 + r * 34;
+    kinds.forEach(([label, v], i) => {
+      const bx = (W - (kinds.length * cw + (kinds.length - 1) * 6)) / 2 + i * (cw + 6);
+      const on = modeKind === v, isNew = AIMY.has(v);
+      rr(bx, by, cw, 30, 15); ctx.fillStyle = on ? (isNew ? '#a7f3d0' : '#fde68a') : '#262a35'; ctx.fill();
+      text(label, bx + cw / 2, by + 15, 13, on ? '#111827' : isNew ? '#a7f3d0' : '#cbd5e1', 'center', '800');
+      buttons.push({ x: bx, y: by, w: cw, h: 30, fn: () => { modeKind = v; } });
+    });
   });
   const hint = { classic: 'Clear the picture before the board jams',
     sand: 'Sand: pixels fall · slower belt · no merging shooters',
     boss: 'Boss: the picture regrows pixels — outpace it',
     strict: 'Strict: 4-slot queue — if it\'s full, you can\'t clear lines',
-    duel: 'Duel: fixed piece order — win, then challenge a friend to beat it' }[modeKind];
-  text(hint, W / 2, 232, 11, modeKind === 'classic' ? '#94a3b8' : '#fde68a', 'center', '600');
+    duel: 'Duel: fixed piece order — win, then challenge a friend to beat it',
+    line: 'Line: tap a shooter, then tap an edge — it empties down that row or column',
+    aim: 'Aim: tap a shooter, then drag to aim. The balls bounce off colors that don\'t match' }[modeKind];
+  text(hint, W / 2, 256, 11, modeKind === 'classic' ? '#94a3b8' : '#fde68a', 'center', '600');
   // setting: auto-launch
   {
-    const pw = 200, px = (W - pw) / 2, py = 246;
+    const pw = 200, px = (W - pw) / 2, py = 270;
     rr(px, py, pw, 26, 13); ctx.fillStyle = autoLaunch ? '#14532d' : '#262a35'; ctx.fill();
     text(`Auto-launch shooters: ${autoLaunch ? 'ON' : 'OFF'}`, W / 2, py + 13, 12, autoLaunch ? '#a7f3d0' : '#cbd5e1', 'center', '700');
     buttons.push({ x: px, y: py, w: pw, h: 26, fn: () => { autoLaunch = !autoLaunch; saveMeta(); } });
   }
   // album
-  text(`ALBUM  ${album.size}/${LEVELS.length}  ·  tap a picture to play it`, W / 2, 292, 11, '#94a3b8', 'center', '800');
+  text(`ALBUM  ${album.size}/${LEVELS.length}  ·  tap a picture to play it`, W / 2, 312, 11, '#94a3b8', 'center', '800');
   const perRow = 4, s = 52, gap = 30;
   LEVELS.forEach((lv, i) => {
     const row = Math.floor(i / perRow), col = i % perRow;
     const inRow = Math.min(perRow, LEVELS.length - row * perRow);
     const x0 = (W - (inRow * s + (inRow - 1) * gap)) / 2;
-    const x = x0 + col * (s + gap), y = 310 + row * 86;
+    const x = x0 + col * (s + gap), y = 330 + row * 86;
     const has = album.has(lv.name);
     drawThumb(lv, x, y, s, has);
     text(`${i + 1}. ${lv.name}`, x + s / 2, y + s + 15, 10, has ? '#e2e8f0' : '#64748b', 'center', '700');
     buttons.push({ x: x - 4, y: y - 4, w: s + 8, h: s + 26, fn: () => start(i, false) });
   });
   // wallet + streak
-  const wy = 310 + Math.ceil(LEVELS.length / perRow) * 86 - 4;
+  const wy = 330 + Math.ceil(LEVELS.length / perRow) * 86 - 4;
   rr(40, wy, W - 80, 50, 14); ctx.fillStyle = '#1a1d25'; ctx.fill();
   drawCoin(76, wy + 25, 11);
   text(`${coins} coins`, 94, wy + 25, 15, '#fde68a', 'left', '800');
@@ -665,11 +793,33 @@ cv.addEventListener('pointerdown', e => {
   for (let i = 0; i < QN(); i++) {
     const qx = QX() + i * (QW + QG);
     if (x >= qx && x <= qx + QW && y >= QY && y <= QY + QH) {
+      if (game.cfg.lineAim || game.cfg.freeAim) {       // arm it; the picture is where you choose
+        if (i >= game.queue.length) return;
+        selQ = selQ === i ? -1 : i;
+        return;
+      }
       const r = game.launch(i);
       if (r === 'full') toast('Belt is full', '#fca5a5');
       else if (r === 'gap') toast('Wait for a gap on the belt', '#fca5a5');
       return;
     }
+  }
+  // Line: a tap on or near the picture picks the row or column the armed shooter empties into.
+  if (game.cfg.lineAim && selQ >= 0 && y < TRAY_Y - 10) {
+    const slot = slotFromPoint(x, y);
+    if (slot != null) {
+      const r = game.aimAt(selQ, slot);
+      if (r === 'taken') toast('Another shooter already holds that line', '#fca5a5');
+      else if (r === 'ok') selQ = -1;
+      return;
+    }
+  }
+  // Aim: drag anywhere over the picture to set the angle; release fires the volley.
+  if (game.cfg.freeAim && selQ >= 0 && y < TRAY_Y - 10) {
+    if (game.volleyActive()) { toast('Wait for the volley to come back', '#fca5a5'); return; }
+    aimDrag = { x, y };
+    try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+    return;
   }
   if (y >= TRAY_Y - 10) {
     const i = Math.min(2, Math.max(0, Math.floor(x / (W / 3))));
@@ -680,11 +830,23 @@ cv.addEventListener('pointerdown', e => {
   }
 });
 cv.addEventListener('pointermove', e => {
-  if (!drag) return;
   const [x, y] = pt(e);
+  if (aimDrag) { aimDrag.x = x; aimDrag.y = y; return; }
+  if (mode === 'play' && game && game.cfg.lineAim && selQ >= 0) hoverSlot = slotFromPoint(x, y);
+  if (!drag) return;
   drag.x = x; drag.y = y;
 });
 cv.addEventListener('pointerup', () => {
+  if (aimDrag) {
+    const a = aimAngleTo(aimDrag.x, aimDrag.y);
+    aimDrag = null;
+    if (mode === 'play' && selQ >= 0 && selQ < game.queue.length) {
+      const r = game.aimShoot(selQ, a);
+      if (r === 'ok') selQ = -1;
+      else if (r === 'busy') toast('Wait for the volley to come back', '#fca5a5');
+    }
+    return;
+  }
   if (!drag || mode !== 'play') { drag = null; return; }
   const g = dragGeom(), i = drag.i;
   drag = null;

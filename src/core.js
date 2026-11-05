@@ -70,6 +70,17 @@
     // Off here, so normal play keeps the adaptive pick; index.html turns it on for Duel runs.
     // Also turn it on to replay a run exactly: same seed + same moves = same game.
     fairPieces: false,
+
+    // ---- shooting models. Default (both off) is the belt: shooters circle and fire at whatever
+    // they happen to see, which is why automating it barely changes the bot's win rate. ----
+    lineAim: false,     // Line: you pick the row or column a shooter fires down, and it empties into it
+    lineFireGap: 0.26,  // seconds between shots from an emplaced shooter
+    linePatience: 1.2,  // if it cannot hit anything for this long, unused ammo goes back to the queue
+    freeAim: false,     // Aim: drag to set an angle, the shooter's ammo fires as a bouncing volley
+    ballSpeed: 11,      // picture cells per second
+    ballGap: 0.07,      // seconds between balls in one volley
+    ballLife: 7,        // a ball gives up after this long, so a bad angle cannot stall the game
+    ballBounceOnKill: true, // a matching pixel is destroyed and the ball bounces off it (Ballz-style)
   };
 
   function rngFrom(seed) {
@@ -137,6 +148,9 @@
       this.tray = [null, null, null];
       this.queue = [];
       this.belt = [];
+      this.emplaced = [];   // Line mode: shooters parked on a slot, emptying into their line
+      this.balls = [];      // Aim mode: balls in flight, in picture-cell coordinates
+      this.pending = [];    // Aim mode: balls of the current volley not yet launched
       this.score = 0; this.lines = 0; this.moves = 0; this.time = 0;
       this.shotsFired = 0; this.shotsLost = 0; this.picsCleared = 0; this.continues = 0;
       this._id = 0;
@@ -159,6 +173,8 @@
       this.bossTimer = 0;
       this.bossInterval = this.cfg.bossInterval || autoBossInterval(pixelCount(level));
       this.stormTimer = 0; this.stormInterval = this.cfg.stormStart; this.stormDropped = 0;
+      this.launchX = this.N / 2; this.volleyT = 0;
+      if (this.emplaced) { this.emplaced.length = 0; this.balls.length = 0; this.pending.length = 0; }
       this.lapSeconds = (this.cfg.lapSeconds || autoLapSeconds(this.N)) * (this.sandMode ? this.cfg.sandLapMult : 1);
       this.mergeQueue = this.sandMode ? this.cfg.sandMergeQueue : this.cfg.strictQueue ? false : this.cfg.mergeQueue;
       this.speed = this.lap / this.lapSeconds;
@@ -185,6 +201,8 @@
       const p = { [RAINBOW]: 0 };
       for (const s of this.queue) p[s.color] = (p[s.color] || 0) + s.ammo;
       for (const s of this.belt) p[s.color] = (p[s.color] || 0) + s.ammo;
+      for (const s of this.emplaced) p[s.color] = (p[s.color] || 0) + s.ammo;
+      for (const s of this.pending) p[s.color] = (p[s.color] || 0) + 1;
       return p;
     }
 
@@ -364,6 +382,116 @@
       this.emit('launch', { color: s.color, ammo: s.ammo });
       return 'ok';
     }
+
+    // ----- Line mode: you choose the row or column -----
+    // Park a queued shooter on an edge slot. It empties its ammo down that one line of sight,
+    // re-scanning between shots, so it eats inward as the outer pixels come off.
+    aimAt(i, slot) {
+      if (this.status !== 'play') return 'over';
+      if (i < 0 || i >= this.queue.length) return 'empty';
+      if (slot == null || slot < 0 || slot >= this.lap) return 'badslot';
+      if (this.emplaced.some(e => e.slot === slot)) return 'taken';
+      const s = this.queue.splice(i, 1)[0];
+      this.emplaced.push({ id: ++this._id, color: s.color, ammo: s.ammo, slot, cd: 0.12, idle: 0 });
+      this.emit('aim', { color: s.color, ammo: s.ammo, slot });
+      return 'ok';
+    }
+    updateEmplaced(dt) {
+      for (let i = this.emplaced.length - 1; i >= 0; i--) {
+        const e = this.emplaced[i];
+        e.cd -= dt;
+        if (e.cd > 0) continue;
+        const before = e.ammo;
+        this.tryFire(e, e.slot);
+        if (e.ammo < before) { e.cd = this.cfg.lineFireGap; e.idle = 0; }
+        else {
+          e.cd = 0.08;
+          e.idle += dt + 0.08;
+          if (e.idle >= this.cfg.linePatience) { // nothing left to hit from here: give the ammo back
+            this.emplaced.splice(i, 1);
+            if (this.enqueue(e.color, e.ammo)) this.emit('returned', { color: e.color, ammo: e.ammo });
+            else { this.shotsLost += e.ammo; this.emit('lost', { color: e.color, ammo: e.ammo }); }
+            continue;
+          }
+        }
+        if (e.ammo <= 0) {
+          this.emplaced.splice(i, 1);
+          this.emit('spentAt', { slot: e.slot, color: e.color });
+        }
+      }
+    }
+
+    // ----- Aim mode: drag an angle, the ammo flies as a bouncing volley -----
+    volleyActive() { return this.balls.length > 0 || this.pending.length > 0; }
+    // angle in radians, measured from the launcher; the caller keeps it pointing into the picture.
+    aimShoot(i, angle) {
+      if (this.status !== 'play') return 'over';
+      if (i < 0 || i >= this.queue.length) return 'empty';
+      if (this.volleyActive()) return 'busy';
+      const s = this.queue.splice(i, 1)[0];
+      const sp = this.cfg.ballSpeed;
+      const vx = Math.cos(angle) * sp, vy = Math.sin(angle) * sp;
+      for (let n = 0; n < s.ammo; n++) {
+        this.pending.push({ at: n * this.cfg.ballGap, color: s.color, x: this.launchX, y: this.N - 0.001, vx, vy });
+      }
+      this.volleyT = 0;
+      this.emit('volley', { color: s.color, ammo: s.ammo, angle });
+      return 'ok';
+    }
+    // One ball step. Cell walls are axis-aligned, so a hit reflects whichever axis it crossed.
+    stepBall(b, dt) {
+      const N = this.N;
+      let left = dt;
+      while (left > 1e-6) {
+        const step = Math.min(left, 0.18 / Math.max(1e-6, Math.hypot(b.vx, b.vy)));
+        left -= step;
+        const nx = b.x + b.vx * step, ny = b.y + b.vy * step;
+        if (nx < 0 || nx >= N) { b.vx = -b.vx; b.x = Math.max(0.001, Math.min(N - 0.001, nx)); continue; }
+        if (ny < 0) { b.vy = -b.vy; b.y = 0.001; continue; }
+        if (ny >= N) { b.dead = true; return; }            // out the bottom, like Ballz
+        const cx = Math.floor(nx), cy = Math.floor(ny);
+        const cell = this.pic[cy] && this.pic[cy][cx];
+        if (cell) {
+          const ox = Math.floor(b.x), oy = Math.floor(b.y);
+          const crossedX = cx !== ox, crossedY = cy !== oy;
+          const match = b.color === RAINBOW || cell === b.color;
+          if (match) {
+            this.pic[cy][cx] = null;
+            b.ammoHit = (b.ammoHit || 0) + 1;
+            this.shotsFired++;
+            this.score += 5;
+            this.emit('ballHit', { x: cx, y: cy, color: b.color, pcolor: cell, bx: b.x, by: b.y });
+            if (this.sandMode) this.dropColumn(cx, cy);
+            if (!this.cfg.ballBounceOnKill) { b.x = nx; b.y = ny; continue; }
+          } else {
+            this.emit('ballBounce', { x: cx, y: cy, bx: b.x, by: b.y });
+          }
+          if (crossedY && !crossedX) b.vy = -b.vy;
+          else if (crossedX && !crossedY) b.vx = -b.vx;
+          else { b.vx = -b.vx; b.vy = -b.vy; }
+          continue; // stay put this step; the reflected velocity carries it out next step
+        }
+        b.x = nx; b.y = ny;
+      }
+    }
+    updateBalls(dt) {
+      if (this.pending.length) {
+        this.volleyT += dt;
+        while (this.pending.length && this.pending[0].at <= this.volleyT) {
+          const p = this.pending.shift();
+          this.balls.push({ color: p.color, x: p.x, y: p.y, vx: p.vx, vy: p.vy, life: 0 });
+        }
+      }
+      for (let i = this.balls.length - 1; i >= 0; i--) {
+        const b = this.balls[i];
+        b.life += dt;
+        this.stepBall(b, dt);
+        if (b.dead || b.life > this.cfg.ballLife) {
+          this.balls.splice(i, 1);
+          this.launchX = Math.max(0.5, Math.min(this.N - 0.5, b.x)); // launcher follows the last ball home
+        }
+      }
+    }
     // The cell a shooter at slot i would hit (first pixel along its line of sight).
     scanTarget(i) {
       const N = this.N, side = Math.floor(i / N), k = i % N;
@@ -443,21 +571,25 @@
     update(dt) {
       if (this.status !== 'play') return;
       this.time += dt;
-      for (const s of this.belt) {
-        s.pos += this.speed * dt;
-        const slot = Math.min(Math.floor(s.pos), this.lap - 1);
-        while (s.last < slot) { s.last++; this.tryFire(s, s.last); }
-      }
-      if (this.cfg.autoLaunch && this.queue.length && this.canLaunch() === 'ok') this.launch(0);
-      for (let i = this.belt.length - 1; i >= 0; i--) {
-        const s = this.belt[i];
-        if (s.ammo <= 0) {
-          this.belt.splice(i, 1);
-          this.emit('spent', { pos: s.pos, color: s.color });
-        } else if (s.pos >= this.lap) {
-          this.belt.splice(i, 1);
-          if (this.enqueue(s.color, s.ammo)) this.emit('returned', { color: s.color, ammo: s.ammo });
-          else { this.shotsLost += s.ammo; this.emit('lost', { color: s.color, ammo: s.ammo }); }
+      if (this.cfg.freeAim) this.updateBalls(dt);
+      else if (this.cfg.lineAim) this.updateEmplaced(dt);
+      else {
+        for (const s of this.belt) {
+          s.pos += this.speed * dt;
+          const slot = Math.min(Math.floor(s.pos), this.lap - 1);
+          while (s.last < slot) { s.last++; this.tryFire(s, s.last); }
+        }
+        if (this.cfg.autoLaunch && this.queue.length && this.canLaunch() === 'ok') this.launch(0);
+        for (let i = this.belt.length - 1; i >= 0; i--) {
+          const s = this.belt[i];
+          if (s.ammo <= 0) {
+            this.belt.splice(i, 1);
+            this.emit('spent', { pos: s.pos, color: s.color });
+          } else if (s.pos >= this.lap) {
+            this.belt.splice(i, 1);
+            if (this.enqueue(s.color, s.ammo)) this.emit('returned', { color: s.color, ammo: s.ammo });
+            else { this.shotsLost += s.ammo; this.emit('lost', { color: s.color, ammo: s.ammo }); }
+          }
         }
       }
       if (this.bossMode && this.countPixels() > 0) {
