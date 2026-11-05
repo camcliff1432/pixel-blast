@@ -63,6 +63,11 @@
     stormAccel: 0.99,   // interval multiplier after each new pixel (speeds up)
     stormMin: 0.2,      // fastest interval (bot survives ~3.5 min median with these)
     stormSurge: 6,      // sandstorm: a jammed board reshuffles the tray but drops this many extra pixels
+    // Pieces come from a seeded sequence that does not depend on how the run is going, so the same
+    // seed gives the same trays at the same move numbers (duels, daily puzzles, reproducible bot runs).
+    // Colors are still weighted toward what the picture needs, but frozen at the picture's start.
+    // Set false for the old adaptive pick (re-weighted every piece from the live picture and queue).
+    fairPieces: true,
   };
 
   function rngFrom(seed) {
@@ -73,6 +78,16 @@
       t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
       return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
+  }
+  // A stream of its own for piece number n (attempt a of a reshuffle), mixed so that neighbouring
+  // indexes are unrelated. Piece n is the same for everyone on this seed, whatever they have played.
+  function pieceRng(seed, n, a) {
+    let h = Math.imul(seed ^ 0x9e3779b9, 0x85ebca6b);
+    h = Math.imul(h ^ (n + 1), 0xc2b2ae35);
+    h = Math.imul(h ^ ((a + 1) * 0x27d4eb2f), 0x165667b1);
+    const r = rngFrom((h ^ (h >>> 15)) >>> 0);
+    r(); // warm up: the first draw of a fresh stream tracks its seed too closely
+    return r;
   }
   function shapeSize(sh) {
     return { w: Math.max(...sh.map(c => c[0])) + 1, h: Math.max(...sh.map(c => c[1])) + 1 };
@@ -111,7 +126,8 @@
       this.cfg = Object.assign({}, DEFAULTS, opts);
       if (this.cfg.strictQueue) this.cfg.queueSize = this.cfg.strictQueueSize;
       this.seed = opts.seed != null ? opts.seed >>> 0 : Math.floor(Math.random() * 4294967296);
-      this.rng = rngFrom(this.seed);            // pieces: same seed = same piece order (duels)
+      this.rng = rngFrom(this.seed);            // pieces, when cfg.fairPieces is off
+      this.pieceNo = 0;                         // fair pieces: index into the seeded piece sequence
       this.envRng = rngFrom(this.seed ^ 0x9e3779b9); // boss regrowth / sandstorm, kept separate so pieces stay in sync
       this.events = [];
       this.BN = this.cfg.boardSize;
@@ -148,6 +164,12 @@
       this.ammoPerBlock = level.ammoPerBlock || this.cfg.ammoPerBlock || autoAmmoPerBlock(level);
       this.colors = KEYS.filter(k => level.rows.some(r => r.includes(k)));
       if (!this.colors.length) this.colors = ['R'];
+      // Fair pieces: the same weighting pickColor() would use on the untouched picture, frozen here.
+      // It depends only on the level, so two players on one seed draw the same colors all run.
+      const tally = {};
+      for (const row of this.pic) for (const c of row) if (c) tally[c] = (tally[c] || 0) + 1;
+      this.colorWeights = this.colors.map(k => (tally[k] || 0) + this.cfg.colorNeedBonus * this.ammoPerBlock);
+      this.colorWeightTotal = this.colorWeights.reduce((a, b) => a + b, 0) || 1;
     }
     nextPicture(level) { this.setPicture(level); if (this.status === 'won') this.status = 'play'; }
     countPixels() { let n = 0; for (const r of this.pic) for (const c of r) if (c) n++; return n; }
@@ -197,11 +219,27 @@
       const sh = SHAPES[Math.floor(this.rng() * SHAPES.length)];
       return Object.assign({ sh, color: this.pickColor() }, shapeSize(sh));
     }
+    // Piece number n of this seed's sequence (attempt a > 0 = a reshuffled tray). Reads no run state.
+    fairPiece(n, a) {
+      const r = pieceRng(this.seed, n, a);
+      const sh = SHAPES[Math.floor(r() * SHAPES.length)];
+      let x = r() * this.colorWeightTotal, color = this.colors[this.colors.length - 1];
+      for (let i = 0; i < this.colors.length; i++) {
+        x -= this.colorWeights[i];
+        if (x < 0) { color = this.colors[i]; break; }
+      }
+      return Object.assign({ sh, color }, shapeSize(sh));
+    }
     refillTray() {
       for (let a = 0; a < 30; a++) {
-        this.tray = [this.newPiece(), this.newPiece(), this.newPiece()];
-        if (this.tray.some(p => this.canPlaceAnywhere(p.sh))) return;
+        this.tray = this.cfg.fairPieces
+          ? [this.fairPiece(this.pieceNo, a), this.fairPiece(this.pieceNo + 1, a), this.fairPiece(this.pieceNo + 2, a)]
+          : [this.newPiece(), this.newPiece(), this.newPiece()];
+        if (this.tray.some(p => this.canPlaceAnywhere(p.sh))) break;
       }
+      // Always 3 per refill, however many attempts it took, so the sequence stays locked to the
+      // move number: refill m is pieces 3m..3m+2 for every player on this seed.
+      this.pieceNo += 3;
     }
     placePiece(i, gx, gy) {
       if (this.status !== 'play') return false;

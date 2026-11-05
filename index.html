@@ -352,7 +352,7 @@ function render() {
   text(`${game.score}`, W - 52, 26, 17, '#fde68a', 'right', '800');
   rr(W - 42, 12, 30, 28, 8); ctx.fillStyle = '#262a35'; ctx.fill();
   text('☰', W - 27, 26, 16, '#e2e8f0');
-  buttons.push({ x: W - 42, y: 12, w: 30, h: 28, fn: () => { mode = 'menu'; drag = null; } });
+  buttons.push({ x: W - 42, y: 12, w: 30, h: 28, fn: () => { leaveRun(); mode = 'menu'; drag = null; } });
 
   // belt track
   const bx = PIC_X - BELT, by = PIC_Y - BELT, bw = PIC + 2 * BELT;
@@ -551,6 +551,9 @@ function drawLink(y) {
   text(t, W / 2, y, 10, '#94a3b8', 'center', '600');
 }
 function drawEnd() {
+  // The overlay covers the play screen, so drop every button under it: the hit test takes the
+  // first rect that matches, and the play layer's strips used to swallow taps on these buttons.
+  buttons = [];
   ctx.fillStyle = 'rgba(8,10,14,.84)';
   ctx.fillRect(0, 0, W, H);
   const win = mode === 'win';
