@@ -53,6 +53,7 @@
     sand: false,        // sand mode: pixels above a shot pixel fall down
     sandLapMult: 1.5,   // sand mode: belt is this much slower
     sandMergeQueue: false, // sand mode: same-color shooters do NOT merge (merging made it too easy)
+    autoLaunch: false,  // setting: shooters leave the queue on their own (oldest first) whenever the belt has room
     strictQueue: false, // strict mode: you can't clear lines if the new shooters won't fit in the queue
     strictQueueSize: 4, // strict mode: smaller queue, and no same-color merging (bot: ~10-20 pts harder)
     boss: false,        // boss mode: the picture regrows missing pixels over time
@@ -407,6 +408,7 @@
         const slot = Math.min(Math.floor(s.pos), this.lap - 1);
         while (s.last < slot) { s.last++; this.tryFire(s, s.last); }
       }
+      if (this.cfg.autoLaunch && this.queue.length && this.canLaunch() === 'ok') this.launch(0);
       for (let i = this.belt.length - 1; i >= 0; i--) {
         const s = this.belt[i];
         if (s.ammo <= 0) {

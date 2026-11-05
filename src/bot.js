@@ -111,8 +111,7 @@
       if (m) g.placePiece(m.i, m.x, m.y);
       else if (g.cfg.strictQueue && g.queue.length) { const li = g.queue.reduce((b, q, i, a) => q.ammo > a[b].ammo ? i : b, 0); g.launch(li); } // blocked: free a slot
       for (let t = 0; t < think && g.status === 'play'; t += dt) {
-        const li = chooseLaunch(g);
-        if (li >= 0) g.launch(li);
+        if (!g.cfg.autoLaunch) { const li = chooseLaunch(g); if (li >= 0) g.launch(li); }
         g.update(dt);
       }
       g.drain();

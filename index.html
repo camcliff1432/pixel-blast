@@ -55,16 +55,16 @@ let mode = 'menu', game = null, levelIndex = 0, endless = false, testLevel = nul
 let modeKind = 'classic';   // 'classic' | 'sand' | 'boss' (applies to album levels and endless)
 let storm = false;          // sandstorm run
 let duel = null;            // { kind, idx, seed, moves, secs } when playing a challenge link
-let shareLink = '', bestStorm = 0;
+let shareLink = '', bestStorm = 0, autoLaunch = false;
 let fallOff = new Map(); // sand mode: 'x,y' -> remaining fall distance in cells (negative)
 let effects = [], projs = [], toasts = [], drag = null, buttons = [], time = 0, winDelay = 0;
 let coins = ECON.startCoins, streak = 0, album = new Set(), result = null;
 try {
   const s = JSON.parse(localStorage.getItem('pixelblast-meta-v3') || 'null');
-  if (s) { coins = s.coins; streak = s.streak; album = new Set(s.album); bestStorm = s.bestStorm || 0; }
+  if (s) { coins = s.coins; streak = s.streak; album = new Set(s.album); bestStorm = s.bestStorm || 0; autoLaunch = !!s.autoLaunch; }
 } catch (_) {}
 function saveMeta() {
-  try { localStorage.setItem('pixelblast-meta-v3', JSON.stringify({ coins, streak, album: [...album], bestStorm })); } catch (_) {}
+  try { localStorage.setItem('pixelblast-meta-v3', JSON.stringify({ coins, streak, album: [...album], bestStorm, autoLaunch })); } catch (_) {}
 }
 const streakMult = s => Math.min(ECON.streakCap, 1 + ECON.streakStep * Math.max(0, s - 1));
 const continueCost = () => game ? ECON.continueCosts[game.continues] : null; // undefined when out of continues
@@ -76,7 +76,7 @@ function start(idx, isEndless, level, isTest) {
   levelIndex = idx;
   storm = false; duel = null; shareLink = '';
   const lv = level || (isEndless ? LEVELS[Math.floor(Math.random() * LEVELS.length)] : LEVELS[idx]);
-  game = new Game(lv, { sand: modeKind === 'sand', boss: modeKind === 'boss', strictQueue: modeKind === 'strict' });
+  game = new Game(lv, { sand: modeKind === 'sand', boss: modeKind === 'boss', strictQueue: modeKind === 'strict', autoLaunch });
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
@@ -97,7 +97,7 @@ function useBooster(kind) {
 function startStorm() {
   testLevel = null; endless = false;
   const seed = Math.floor(Math.random() * 1e9);
-  game = new Game(stormLevel(seed, 12), { storm: true, seed });
+  game = new Game(stormLevel(seed, 12), { storm: true, seed, autoLaunch });
   storm = true; duel = null; shareLink = '';
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
@@ -106,7 +106,7 @@ const KIND_LETTER = { classic: 'c', sand: 's', boss: 'b', strict: 't' }, LETTER_
 function startDuel(d) {
   testLevel = null; endless = false; storm = false; shareLink = '';
   levelIndex = d.idx;
-  game = new Game(LEVELS[d.idx], { seed: d.seed, sand: d.kind === 'sand', boss: d.kind === 'boss', strictQueue: d.kind === 'strict' });
+  game = new Game(LEVELS[d.idx], { seed: d.seed, sand: d.kind === 'sand', boss: d.kind === 'boss', strictQueue: d.kind === 'strict', autoLaunch });
   duel = d;
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
@@ -412,7 +412,10 @@ function render() {
   drawBooster('shuffle', 340, 168);
 
   // queue
-  text(`TAP A SHOOTER TO LAUNCH  ·  BELT ${game.belt.length}/${game.beltCap}`, W / 2, 335, 10, '#64748b', 'center', '700');
+  const lbl = game.cfg.autoLaunch ? `AUTO-LAUNCH ON  ·  BELT ${game.belt.length}/${game.beltCap}  ·  tap to switch off`
+    : `TAP A SHOOTER TO LAUNCH  ·  BELT ${game.belt.length}/${game.beltCap}  ·  auto: off`;
+  text(lbl, W / 2, 335, 10, game.cfg.autoLaunch ? '#a7f3d0' : '#64748b', 'center', '700');
+  buttons.push({ x: 20, y: 326, w: W - 40, h: 18, fn: () => { autoLaunch = !autoLaunch; game.cfg.autoLaunch = autoLaunch; saveMeta(); toast(autoLaunch ? 'Auto-launch on: shooters go by themselves' : 'Auto-launch off: tap shooters to launch', '#e2e8f0'); } });
   for (let i = 0; i < QN(); i++) {
     const x = QX() + i * (QW + QG);
     rr(x, QY, QW, QH, 10);
@@ -501,22 +504,29 @@ function drawMenu() {
     sand: 'Sand: pixels fall · slower belt · no merging shooters',
     boss: 'Boss: the picture regrows pixels — outpace it',
     strict: 'Strict: 4-slot queue — if it\'s full, you can\'t clear lines' }[modeKind];
-  text(hint, W / 2, 236, 11, modeKind === 'classic' ? '#94a3b8' : '#fde68a', 'center', '600');
+  text(hint, W / 2, 232, 11, modeKind === 'classic' ? '#94a3b8' : '#fde68a', 'center', '600');
+  // setting: auto-launch
+  {
+    const pw = 200, px = (W - pw) / 2, py = 246;
+    rr(px, py, pw, 26, 13); ctx.fillStyle = autoLaunch ? '#14532d' : '#262a35'; ctx.fill();
+    text(`Auto-launch shooters: ${autoLaunch ? 'ON' : 'OFF'}`, W / 2, py + 13, 12, autoLaunch ? '#a7f3d0' : '#cbd5e1', 'center', '700');
+    buttons.push({ x: px, y: py, w: pw, h: 26, fn: () => { autoLaunch = !autoLaunch; saveMeta(); } });
+  }
   // album
-  text(`ALBUM  ${album.size}/${LEVELS.length}  ·  tap a picture to play it`, W / 2, 262, 11, '#94a3b8', 'center', '800');
+  text(`ALBUM  ${album.size}/${LEVELS.length}  ·  tap a picture to play it`, W / 2, 292, 11, '#94a3b8', 'center', '800');
   const perRow = 4, s = 52, gap = 30;
   LEVELS.forEach((lv, i) => {
     const row = Math.floor(i / perRow), col = i % perRow;
     const inRow = Math.min(perRow, LEVELS.length - row * perRow);
     const x0 = (W - (inRow * s + (inRow - 1) * gap)) / 2;
-    const x = x0 + col * (s + gap), y = 280 + row * 86;
+    const x = x0 + col * (s + gap), y = 310 + row * 86;
     const has = album.has(lv.name);
     drawThumb(lv, x, y, s, has);
     text(`${i + 1}. ${lv.name}`, x + s / 2, y + s + 15, 10, has ? '#e2e8f0' : '#64748b', 'center', '700');
     buttons.push({ x: x - 4, y: y - 4, w: s + 8, h: s + 26, fn: () => start(i, false) });
   });
   // wallet + streak
-  const wy = 280 + Math.ceil(LEVELS.length / perRow) * 86 - 4;
+  const wy = 310 + Math.ceil(LEVELS.length / perRow) * 86 - 4;
   rr(40, wy, W - 80, 50, 14); ctx.fillStyle = '#1a1d25'; ctx.fill();
   drawCoin(76, wy + 25, 11);
   text(`${coins} coins`, 94, wy + 25, 15, '#fde68a', 'left', '800');

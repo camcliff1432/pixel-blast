@@ -21,6 +21,7 @@ for (const k of Object.keys(DEFAULTS)) {
 }
 if (args.includes('--sand')) cfg.sand = true;
 if (args.includes('--strict')) cfg.strictQueue = true;
+if (args.includes('--auto')) cfg.autoLaunch = true;
 if (args.includes('--boss')) cfg.boss = true;
 
 const pct = x => (x * 100).toFixed(0).padStart(4) + '%';
