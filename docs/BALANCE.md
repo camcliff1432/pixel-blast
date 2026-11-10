@@ -96,11 +96,13 @@ careless is fully random, so real players land between the two columns.
 | Line | 61% | 42% | +19 | 29 |
 | Aim | 52% | 13% | +39 | 35 |
 | Echo | 40% | 24% | +16 | 46 |
+| Plinko | 45% | 22% | +23 | 35 |
 
 - **Belt:** nothing to decide. This is why auto-launch costs nothing.
 - **Line:** as winnable as the belt when played well, and it punishes carelessness. The existing level balance carries over.
 - **Aim:** the widest skill range and the hardest overall. One volley flies at a time and other colors are walls, so it is short of throughput, not over-powered.
 - **Echo:** in Echo the aiming is the placement, so "careful" is a bot that builds toward board lines whose picture lines still hold pixels, and "careless" is the normal placement bot. Planning is worth 16 points, but even planned play wins 40% against the belt's 60% and takes half again as many moves: you can only reach the lines you manage to clear. Widening the echo (`echoSpread: 1` or `2`, one or two extra picture lines each side) lifts the win rate to 42% and 49% but the careless bot rises to 39% and 48% with it, so the extra reach buys ease by removing the decision. Balance Echo through level design and picture size, not through reach.
+- **Plinko:** careful means trying each column on a copy of the picture and taking the best; careless is a random column. Where you drop is worth 23 points, more than Line and less than Aim. It sits 15 points under the belt because a ball only comes in from the top, so pixels low down or under another color wait until what covers them is gone. The bounce has a little randomness in it, so even the careful bot is guessing at the exact path.
 
 ## Read-outs and next tuning steps
 - **Level 1 is too hard for a first level.** Heart is a 74% first-try win; a tutorial level should be about 95%. Options: a smaller picture, per-level easier settings (bigger combo bonus, longer belt), or a guided first level.

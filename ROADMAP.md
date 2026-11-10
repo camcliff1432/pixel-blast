@@ -129,7 +129,10 @@ This phase, not the port, is the long pole — and it is what App Store guidelin
 - **Duel:** a mode on the menu. Pieces come from the seed instead of from how the run is going, so the same seed deals the same trays at the same move numbers to both players. Win one and "Challenge a friend" copies a link with the level and seed; your friend plays that exact game, with no continues, and has to beat your move count (time breaks ties). No server needed. It costs about 14 points of win rate against the normal adaptive piece order (see [docs/BALANCE.md](docs/BALANCE.md)), which is why it is its own mode rather than the rule everywhere.
 - **Line:** tap a shooter to arm it, then tap an edge of the picture. It parks there and empties down that row or column; ammo it cannot use comes back to the queue.
 - **Aim:** tap a shooter, drag to set an angle, release. Its ammo flies as a volley of balls that destroy matching pixels and bounce off the rest, then drop out of the bottom.
-- **Echo:** no aiming step at all. The board row or column you clear fires straight away down the matching rows or columns of the picture, from both ends, and unused ammo is banked in the queue until your next clear. While you drag a piece, the picture shows which lines the clear would fire down. What each of these three is worth in skill, measured, is in [docs/BALANCE.md](docs/BALANCE.md).
+- **Echo:** no aiming step at all. The board row or column you clear fires straight away down the matching rows or columns of the picture, from both ends, and unused ammo is banked in the queue until your next clear. While you drag a piece, the picture shows which lines the clear would fire down. 
+- **Plinko:** each shooter is one ball. Touch the picture, slide to pick where it goes in along the top, let go. It falls under gravity, breaks pixels of its own color (one hit each, up to its ammo) and bounces off every other color like a peg, scattering sideways depending on where it lands. Hits it never used come back to the queue. Up to four balls can be falling at once.
+
+What each of these four is worth in skill, measured, is in [docs/BALANCE.md](docs/BALANCE.md).
 
 **Ideas, roughly by effort (small → big)**
 | Mode | How it plays | Why it's interesting |

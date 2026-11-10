@@ -4,7 +4,7 @@
 // against a careless one. The gap between them is the skill a shooting model actually asks for.
 // A model where careless play does as well as careful play has no decision in it.
 //
-// Usage: node sim/agency.js [--runs 40] [--angles 16] [--level heart] [--modes belt,line,aim,echo] [--echoSpread 1]
+// Usage: node sim/agency.js [--runs 40] [--angles 16] [--level heart] [--modes belt,line,aim,echo,plinko] [--echoSpread 1]
 const LEVELS = require('../src/levels.js');
 const { Game, rngFrom, fullLines } = require('../src/core.js');
 const { chooseMove, chooseLaunch, scorePlacement } = require('../src/bot.js');
@@ -12,7 +12,7 @@ const { chooseMove, chooseLaunch, scorePlacement } = require('../src/bot.js');
 const args = process.argv.slice(2);
 const opt = (n, d) => { const i = args.indexOf('--' + n); return i >= 0 ? args[i + 1] : d; };
 const runs = +opt('runs', 40), ANGLES = +opt('angles', 16), only = opt('level', null);
-const MODES = opt('modes', 'belt,line,aim,echo').split(',');
+const MODES = opt('modes', 'belt,line,aim,echo,plinko').split(',');
 const W_TAKE = +opt('wTake', 25), W_PLAN = +opt('wPlan', 3), SPREAD = +opt('echoSpread', 0);   // echo bot: weight on pixels taken now, and on building toward lines that still have pixels
 
 // Pixels a shooter of this color would take from this slot: its own color, from the outside in,
@@ -96,6 +96,18 @@ function chooseEchoMove(g) {
   }
   return best;
 }
+// Drop a ball on a copy of the picture and count what it would break. The bounce jitter comes from
+// a fixed stream here, not the game's own, so this is a good guess at the real drop rather than a replay.
+function tryDrop(g, qi, x) {
+  const sh = Object.create(g);
+  sh.pic = g.pic.map(r => r.slice());
+  sh.queue = g.queue.map(s => Object.assign({}, s));
+  sh.drops = []; sh.shotsFired = 0; sh.score = 0; sh.shotsLost = 0; sh.emit = () => {};
+  sh.envRng = rngFrom(12345);
+  if (sh.dropBall(qi, x) !== 'ok') return 0;
+  for (let t = 0; sh.drops.length && t < 10; t += 0.05) sh.updateDrops(0.05);
+  return sh.shotsFired;
+}
 const stateKey = g => g.countPixels() + '|' + g.queue.map(s => s.color + s.ammo).join(',') + '|' + g.emplaced.length;
 
 // One shooting decision, if the policy wants one. Returns true when it acted.
@@ -119,6 +131,19 @@ function shoot(g, mode, careful, rnd) {
     }
     return !!best && g.aimAt(best.qi, best.slot) === 'ok';
   }
+  if (mode === 'plinko') {
+    if (g.drops.length >= g.cfg.plinkoMax) return false;
+    if (!careful) return g.dropBall(0, rnd() * g.N) === 'ok';
+    const key = stateKey(g) + '|' + g.drops.length;
+    if (g._held === key) return false;
+    let best = null;
+    for (let qi = 0; qi < g.queue.length; qi++) for (let c = 0; c < g.N; c++) {
+      const v = tryDrop(g, qi, c + 0.5);
+      if (v > 0 && (!best || v > best.v)) best = { qi, x: c + 0.5, v };
+    }
+    if (!best) { g._held = key; return false; }
+    return g.dropBall(best.qi, best.x) === 'ok';
+  }
   // aim
   if (g.volleyActive()) return false;
   const lo = -Math.PI + 0.15, hi = -0.15;
@@ -136,7 +161,7 @@ function shoot(g, mode, careful, rnd) {
 }
 
 function play(level, seed, mode, careful) {
-  const g = new Game(level, { seed, lineAim: mode === 'line', freeAim: mode === 'aim', echo: mode === 'echo', echoSpread: SPREAD, autoLaunch: mode === 'belt' && !careful });
+  const g = new Game(level, { seed, lineAim: mode === 'line', freeAim: mode === 'aim', echo: mode === 'echo', echoSpread: SPREAD, plinko: mode === 'plinko', autoLaunch: mode === 'belt' && !careful });
   const rnd = rngFrom(seed ^ 0x51ed270b);
   let decisions = 0;
   while (g.time < 600 && g.status === 'play') {
@@ -156,7 +181,7 @@ const pct = x => (x * 100).toFixed(0).padStart(3) + '%';
 const levels = LEVELS.filter(l => !only || l.id === only);
 const t0 = Date.now();
 console.log(`Shot-decision value · ${runs} runs/level · same placement bot throughout\n`);
-console.log('mode  policy    ' + levels.map(l => l.id.slice(0, 6).padStart(7)).join('') + '    mean   med moves   px/decision   shots lost');
+console.log('mode   policy    ' + levels.map(l => l.id.slice(0, 6).padStart(7)).join('') + '    mean   med moves   px/decision   shots lost');
 const summary = {};
 for (const mode of MODES) {
   for (const careful of [true, false]) {
@@ -175,13 +200,13 @@ for (const mode of MODES) {
     summary[mode + (careful ? 'C' : 'R')] = mean;
     // belt + careless is auto-launch, which makes its launches inside core, so decisions are not counted here
     const ppd = decisions ? (shots / decisions).toFixed(1) : '  -';
-    console.log(mode.padEnd(5), (careful ? 'careful ' : 'careless').padEnd(9), perLevel.map(w => pct(w).padStart(7)).join(''),
+    console.log(mode.padEnd(6), (careful ? 'careful ' : 'careless').padEnd(9), perLevel.map(w => pct(w).padStart(7)).join(''),
       '  ', pct(mean), '  ', String(med(moves) == null ? '-' : med(moves)).padStart(6), '     ', String(ppd).padStart(6), '       ', (lost / games).toFixed(1).padStart(5));
   }
 }
 console.log('\nWhat careful shooting is worth (mean first-try win rate, careful minus careless):');
 for (const mode of MODES) {
   const gap = (summary[mode + 'C'] - summary[mode + 'R']) * 100;
-  console.log(`  ${mode.padEnd(5)} ${gap >= 0 ? '+' : ''}${gap.toFixed(0)} points`);
+  console.log(`  ${mode.padEnd(6)} ${gap >= 0 ? '+' : ''}${gap.toFixed(0)} points`);
 }
 console.log(`\n(${((Date.now() - t0) / 1000).toFixed(1)}s)`);

@@ -85,6 +85,13 @@
     ballGap: 0.07,      // seconds between balls in one volley
     ballLife: 7,        // a ball gives up after this long, so a bad angle cannot stall the game
     ballBounceOnKill: true, // a matching pixel is destroyed and the ball bounces off it (Ballz-style)
+    plinko: false,      // Plinko: drop a shooter in from the top as one ball; it falls, breaks its own color and bounces off the rest
+    plinkoGravity: 26,  // picture cells per second squared
+    plinkoBounce: 0.7,  // how much speed a bounce keeps
+    plinkoKick: 6,      // sideways speed from landing off-centre on a pixel, so it scatters like a peg board
+    plinkoMinHop: 6,    // a landing never bounces up slower than this, so a ball cannot come to rest on the picture
+    plinkoLife: 7,      // seconds before a ball still bouncing gives up; unused hits go back to the queue
+    plinkoMax: 4,       // balls in the air at once
   };
 
   function rngFrom(seed) {
@@ -155,6 +162,7 @@
       this.emplaced = [];   // Line mode: shooters parked on a slot, emptying into their line
       this.balls = [];      // Aim mode: balls in flight, in picture-cell coordinates
       this.pending = [];    // Aim mode: balls of the current volley not yet launched
+      this.drops = [];      // Plinko: balls falling through the picture
       this.score = 0; this.lines = 0; this.moves = 0; this.time = 0;
       this.shotsFired = 0; this.shotsLost = 0; this.picsCleared = 0; this.continues = 0;
       this._id = 0;
@@ -178,7 +186,7 @@
       this.bossInterval = this.cfg.bossInterval || autoBossInterval(pixelCount(level));
       this.stormTimer = 0; this.stormInterval = this.cfg.stormStart; this.stormDropped = 0;
       this.launchX = this.N / 2; this.volleyT = 0;
-      if (this.emplaced) { this.emplaced.length = 0; this.balls.length = 0; this.pending.length = 0; }
+      if (this.emplaced) { this.emplaced.length = 0; this.balls.length = 0; this.pending.length = 0; this.drops.length = 0; }
       this.lapSeconds = (this.cfg.lapSeconds || autoLapSeconds(this.N)) * (this.sandMode ? this.cfg.sandLapMult : 1);
       this.mergeQueue = this.sandMode ? this.cfg.sandMergeQueue : this.cfg.strictQueue ? false : this.cfg.mergeQueue;
       this.speed = this.lap / this.lapSeconds;
@@ -207,6 +215,7 @@
       for (const s of this.belt) p[s.color] = (p[s.color] || 0) + s.ammo;
       for (const s of this.emplaced) p[s.color] = (p[s.color] || 0) + s.ammo;
       for (const s of this.pending) p[s.color] = (p[s.color] || 0) + 1;
+      for (const s of this.drops) p[s.color] = (p[s.color] || 0) + s.ammo;
       return p;
     }
 
@@ -464,6 +473,65 @@
       }
     }
 
+    // ----- Plinko: one ball per shooter, dropped in from the top -----
+    // x is where along the top it goes in, in picture cells. The ball carries the shooter's ammo as
+    // hits: each pixel of its own color it lands on breaks and costs one; every other color is a peg.
+    dropBall(i, x) {
+      if (this.status !== 'play') return 'over';
+      if (i < 0 || i >= this.queue.length) return 'empty';
+      if (this.drops.length >= this.cfg.plinkoMax) return 'busy';
+      const s = this.queue.splice(i, 1)[0];
+      x = Math.max(0.3, Math.min(this.N - 0.3, x));
+      this.drops.push({ id: ++this._id, color: s.color, ammo: s.ammo, x, y: -0.9, vx: 0, vy: 0, life: 0 });
+      this.emit('drop', { color: s.color, ammo: s.ammo, x });
+      return 'ok';
+    }
+    stepDrop(b, dt) {
+      const N = this.N, c = this.cfg;
+      let left = dt;
+      while (left > 1e-6) {
+        const step = Math.min(left, 0.02, 0.15 / Math.max(1e-6, Math.hypot(b.vx, b.vy)));
+        left -= step;
+        b.vy += c.plinkoGravity * step;
+        const nx = b.x + b.vx * step, ny = b.y + b.vy * step;
+        if (nx < 0 || nx >= N) { b.vx = -b.vx * 0.8; continue; }
+        if (ny >= N) { b.out = true; return; }                 // out of the bottom
+        const cx = Math.floor(nx), cy = Math.floor(ny);
+        const cell = cy >= 0 ? this.pic[cy][cx] : null;        // above the picture is open air
+        if (!cell) { b.x = nx; b.y = ny; continue; }
+        const crossedX = cx !== Math.floor(b.x), crossedY = cy !== Math.floor(b.y);
+        if (b.color === RAINBOW || cell === b.color) {
+          this.pic[cy][cx] = null;
+          b.ammo--;
+          this.shotsFired++;
+          this.score += 5;
+          this.emit('ballHit', { x: cx, y: cy, color: b.color, pcolor: cell, bx: b.x, by: b.y });
+          if (this.sandMode) this.dropColumn(cx, cy);
+        } else this.emit('ballBounce', { x: cx, y: cy, bx: b.x, by: b.y });
+        if (crossedX && !crossedY) b.vx = -b.vx * 0.8;                       // side of a pixel
+        else if (b.vy > 0) {                                                 // landed on top of one
+          const off = (nx - (cx + 0.5)) * 2;                                 // -1..1 across the pixel
+          b.vy = -Math.max(c.plinkoMinHop, b.vy * c.plinkoBounce);
+          b.vx = (crossedX ? -b.vx : b.vx) * 0.6 + off * c.plinkoKick + (this.envRng() - 0.5) * 2;
+        } else b.vy = -b.vy * c.plinkoBounce;                                // hit one from underneath
+        if (b.ammo <= 0) return;
+      }
+    }
+    updateDrops(dt) {
+      for (let i = this.drops.length - 1; i >= 0; i--) {
+        const b = this.drops[i];
+        b.life += dt;
+        this.stepDrop(b, dt);
+        if (b.ammo > 0 && !b.out && b.life <= this.cfg.plinkoLife) continue;
+        this.drops.splice(i, 1);
+        this.emit('dropDone', { x: b.x, y: Math.min(b.y, this.N), color: b.color });
+        if (b.ammo > 0) {                                                    // hits it never used
+          if (this.enqueue(b.color, b.ammo)) this.emit('returned', { color: b.color, ammo: b.ammo });
+          else { this.shotsLost += b.ammo; this.emit('lost', { color: b.color, ammo: b.ammo }); }
+        }
+      }
+    }
+
     // ----- Aim mode: drag an angle, the ammo flies as a bouncing volley -----
     volleyActive() { return this.balls.length > 0 || this.pending.length > 0; }
     // angle in radians, measured from the launcher; the caller keeps it pointing into the picture.
@@ -615,6 +683,7 @@
       if (this.status !== 'play') return;
       this.time += dt;
       if (this.cfg.freeAim) this.updateBalls(dt);
+      else if (this.cfg.plinko) this.updateDrops(dt);
       else if (this.cfg.lineAim || this.cfg.echo) this.updateEmplaced(dt);
       else {
         for (const s of this.belt) {
