@@ -96,13 +96,14 @@ const TRAY_Y = 680, TRAY_CELL = 20;
 // ---------- state ----------
 let mode = 'levels', game = null, levelIndex = 0, endless = false, testLevel = null;
 let modeKind = 'classic';   // 'classic' | 'sand' | 'boss' | 'strict' | 'duel' | 'line' | 'aim'
-const AIMY = new Set(['line', 'aim', 'echo']); // modes where you choose the shot instead of riding the belt
+const AIMY = new Set(['line', 'aim', 'echo', 'plinko']); // modes where you choose the shot instead of riding the belt
 let storm = false;          // sandstorm run
 let duel = null;            // { kind, idx, seed, moves, secs } when playing a challenge link
 let shareLink = '', bestStorm = 0, autoLaunch = false;
 let selQ = -1;              // Line/Aim: which queued shooter is armed
 let aimDrag = null;         // Aim: { x, y } current drag point while setting an angle
 let hoverSlot = null;       // Line: the edge slot under the pointer, previewed before you commit
+let dropDrag = null;        // Plinko: { x } while a finger is down choosing where the ball goes in
 let fallOff = new Map(); // sand mode: 'x,y' -> remaining fall distance in cells (negative)
 let effects = [], projs = [], toasts = [], drag = null, buttons = [], time = 0, winDelay = 0;
 let coins = ECON.startCoins, streak = 0, album = new Set(), result = null;
@@ -131,8 +132,9 @@ function start(idx, isEndless, level, isTest, sn) {
   const lv = level || (isEndless ? LEVELS[Math.floor(Math.random() * LEVELS.length)] : LEVELS[idx]);
   // Duel runs use the seeded piece sequence, so two players on one seed get the same trays.
   game = new Game(lv, { sand: mk === 'sand', boss: mk === 'boss', strictQueue: mk === 'strict', fairPieces: mk === 'duel',
-    lineAim: mk === 'line', freeAim: mk === 'aim', echo: mk === 'echo', autoLaunch: (!!sn || autoLaunch) && !AIMY.has(mk) });
-  selQ = -1; aimDrag = null;
+    lineAim: mk === 'line', freeAim: mk === 'aim', echo: mk === 'echo', plinko: mk === 'plinko',
+    autoLaunch: (!!sn || autoLaunch) && !AIMY.has(mk) });
+  selQ = -1; aimDrag = null; dropDrag = null;
   intro = sn && lv.intro || null;
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
@@ -283,6 +285,8 @@ function slotLine(slot) {
   }
   return out;
 }
+// Plinko: the shooter that drops next. The first in the queue unless you tapped another.
+function armedQ() { return selQ >= 0 && selQ < game.queue.length ? selQ : 0; }
 function aimAngleTo(x, y) {
   const pc = PC();
   const lx = PIC_X + game.launchX * pc, ly = PIC_Y + PIC;
@@ -317,6 +321,9 @@ function handleEvents() {
     } else if (e.type === 'ballBounce') {
       const pc = PC();
       effects.push({ type: 'ping', x: PIC_X + e.bx * pc, y: PIC_Y + e.by * pc, t: 0 });
+    } else if (e.type === 'dropDone') {
+      const pc = PC();
+      effects.push({ type: 'poof', x: PIC_X + e.x * pc, y: PIC_Y + e.y * pc, color: e.color, t: 0 });
     } else if (e.type === 'spentAt') {
       const [x, y] = slotXY(e.slot);
       effects.push({ type: 'poof', x, y, color: e.color, t: 0 });
@@ -595,7 +602,7 @@ function render() {
   const n = N(), pc = PC();
 
   // HUD
-  const prefix = storm ? '' : (duel || game.cfg.fairPieces ? 'Duel · ' : '') + (game.cfg.lineAim ? 'Line · ' : game.cfg.freeAim ? 'Aim · ' : game.cfg.echo ? 'Echo · ' : '')
+  const prefix = storm ? '' : (duel || game.cfg.fairPieces ? 'Duel · ' : '') + (game.cfg.lineAim ? 'Line · ' : game.cfg.freeAim ? 'Aim · ' : game.cfg.echo ? 'Echo · ' : game.cfg.plinko ? 'Plinko · ' : '')
     + (game.bossMode ? 'Boss · ' : game.sandMode ? 'Sand · ' : game.cfg.strictQueue ? 'Strict · ' : '');
   const title = storm ? 'Sandstorm' : prefix + (testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : storyN ? `Level ${storyN}` : game.level.name);
   if (tut) { text('Skip', 16, 22, 14, '#93c5fd', 'left', '700'); buttons.push({ x: 8, y: 6, w: 70, h: 34, fn: skipTut }); } else text(title, 16, 22, 16, '#f1f5f9', 'left', '700');
@@ -717,6 +724,23 @@ function render() {
   // ----- Echo mode: shooters sit on whichever edge of their band they last fired from -----
   if (game.cfg.echo) for (const e of game.emplaced) { const [x, y] = slotXY(e.at); shooter(x, y, 10, e.color, e.ammo); }
 
+  // ----- Plinko: where the next ball goes in, and the balls already falling -----
+  if (game.cfg.plinko) {
+    if (game.queue.length) {
+      const q = game.queue[armedQ()];
+      const gx = dropDrag ? Math.max(PIC_X + 6, Math.min(PIC_X + PIC - 6, dropDrag.x)) : PIC_X + PIC / 2;
+      if (dropDrag) {
+        ctx.save(); ctx.setLineDash([3, 6]);
+        ctx.strokeStyle = COL[q.color]; ctx.globalAlpha = 0.8; ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.moveTo(gx, PIC_Y - 8); ctx.lineTo(gx, PIC_Y + PIC); ctx.stroke(); ctx.restore();
+      }
+      ctx.globalAlpha = dropDrag ? 1 : 0.55 + 0.25 * Math.sin(time * 5);
+      shooter(gx, PIC_Y - 12, 10, q.color, q.ammo);
+      ctx.globalAlpha = 1;
+    }
+    for (const b of game.drops) shooter(PIC_X + b.x * pc, PIC_Y + b.y * pc, Math.max(6, pc * 0.36), b.color, b.ammo);
+  }
+
   // ----- Aim mode: launcher, aiming ray, balls in flight -----
   if (game.cfg.freeAim) {
     const lx = PIC_X + game.launchX * pc, ly = PIC_Y + PIC;
@@ -756,6 +780,9 @@ function render() {
   } else if (game.cfg.freeAim) {
     text(selQ >= 0 ? 'DRAG FROM THE PICTURE TO AIM  ·  RELEASE TO FIRE' : game.volleyActive() ? 'VOLLEY IN FLIGHT…' : 'TAP A SHOOTER TO ARM IT',
       W / 2, 335, 10, selQ >= 0 ? '#a7f3d0' : '#64748b', 'center', '700');
+  } else if (game.cfg.plinko) {
+    text(game.queue.length ? 'TOUCH THE PICTURE, SLIDE TO PICK A SPOT, LET GO TO DROP' : 'CLEAR A LINE TO EARN A DROP',
+      W / 2, 335, 10, game.queue.length ? '#a7f3d0' : '#64748b', 'center', '700');
   } else if (game.cfg.echo) {
     text(game.queue.length ? 'BANKED AMMO FIRES WITH YOUR NEXT CLEAR' : 'THE LINE YOU CLEAR FIRES DOWN THE SAME LINE OF THE PICTURE',
       W / 2, 335, 10, game.queue.length ? '#a7f3d0' : '#64748b', 'center', '700');
@@ -931,9 +958,9 @@ function drawMenu() {
   // mode chips
   // Seven modes over two rows. Row 2 is the new shooting models.
   const rows = [[['Classic', 'classic'], ['Sand', 'sand'], ['Boss', 'boss'], ['Strict', 'strict']],
-                [['Duel', 'duel'], ['Line', 'line'], ['Aim', 'aim'], ['Echo', 'echo']]];
+                [['Duel', 'duel'], ['Line', 'line'], ['Aim', 'aim'], ['Echo', 'echo'], ['Plinko', 'plinko']]];
   rows.forEach((kinds, r) => {
-    const cw = 84, by = 184 + r * 34;
+    const cw = kinds.length > 4 ? 68 : 84, by = 184 + r * 34;
     kinds.forEach(([label, v], i) => {
       const bx = (W - (kinds.length * cw + (kinds.length - 1) * 6)) / 2 + i * (cw + 6);
       const on = modeKind === v, isNew = AIMY.has(v);
@@ -949,7 +976,8 @@ function drawMenu() {
     duel: 'Duel: fixed piece order — win, then challenge a friend to beat it',
     line: 'Line: tap a shooter, then tap an edge — it empties down that row or column',
     aim: 'Aim: tap a shooter, then drag to aim. The balls bounce off colors that don\'t match',
-    echo: 'Echo: the row or column you clear fires down the same line of the picture' }[modeKind];
+    echo: 'Echo: the row or column you clear fires down the same line of the picture',
+    plinko: 'Plinko: drop each shooter in from the top. It breaks its color and bounces off the rest' }[modeKind];
   text(hint, W / 2, 256, 11, modeKind === 'classic' ? '#94a3b8' : '#fde68a', 'center', '600');
   // setting: auto-launch
   {
@@ -1113,7 +1141,7 @@ cv.addEventListener('pointerdown', e => {
     const qx = QX() + i * (QW + QG);
     if (x >= qx && x <= qx + QW && y >= QY && y <= QY + QH) {
       if (game.cfg.echo) { if (i < game.queue.length) toast('Banked ammo fires with your next clear', '#a7f3d0'); return; }
-      if (game.cfg.lineAim || game.cfg.freeAim) {       // arm it; the picture is where you choose
+      if (game.cfg.lineAim || game.cfg.freeAim || game.cfg.plinko) {       // arm it; the picture is where you choose
         if (i >= game.queue.length) return;
         selQ = selQ === i ? -1 : i;
         return;
@@ -1134,6 +1162,12 @@ cv.addEventListener('pointerdown', e => {
       return;
     }
   }
+  // Plinko: touch on or above the picture, slide to choose where the ball goes in, let go to drop it.
+  if (game.cfg.plinko && game.queue.length && y < QY - 16 && y > PIC_Y - BELT - 16 && x > PIC_X - BELT && x < PIC_X + PIC + BELT) {
+    dropDrag = { x };
+    try { cv.setPointerCapture(e.pointerId); } catch (_) {}
+    return;
+  }
   // Aim: drag anywhere over the picture to set the angle; release fires the volley.
   if (game.cfg.freeAim && selQ >= 0 && y < TRAY_Y - 10) {
     if (game.volleyActive()) { toast('Wait for the volley to come back', '#fca5a5'); return; }
@@ -1152,12 +1186,23 @@ cv.addEventListener('pointerdown', e => {
 cv.addEventListener('pointermove', e => {
   const [x, y] = pt(e);
   if (aimDrag) { aimDrag.x = x; aimDrag.y = y; return; }
+  if (dropDrag) { dropDrag.x = x; return; }
   if (mode === 'play' && game && game.cfg.lineAim && selQ >= 0) hoverSlot = slotFromPoint(x, y);
   if (!drag) return;
   drag.x = x; drag.y = y;
 });
 cv.addEventListener('pointerup', e => {
   if (swipeX !== null) { const dx = pt(e)[0] - swipeX; swipeX = null; if (mode === 'levels' && Math.abs(dx) > 40) goLevel(dx < 0 ? 1 : -1); }
+  if (dropDrag) {
+    const px = (dropDrag.x - PIC_X) / PC();
+    dropDrag = null;
+    if (mode === 'play' && game.queue.length) {
+      const r = game.dropBall(armedQ(), px);
+      if (r === 'ok') selQ = -1;
+      else if (r === 'busy') toast('Wait for a ball to land', '#fca5a5');
+    }
+    return;
+  }
   if (aimDrag) {
     const a = aimAngleTo(aimDrag.x, aimDrag.y);
     aimDrag = null;
