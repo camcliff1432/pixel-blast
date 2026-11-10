@@ -82,6 +82,26 @@ the rest of the gap with level design instead.
 The same flag makes a run exactly replayable from its seed and move list, which is what the
 regression test in [COCOS_PORT.md](COCOS_PORT.md) is built on, and what a Daily Puzzle would need.
 
+## What the shooting decision is worth (`node sim/agency.js`)
+
+The same bot places the blocks in every run; only the shooting policy changes. "Careful" plays the
+shot well, "careless" plays it at random (or, on the belt, leaves it on auto-launch). The gap is the
+skill a shooting model asks for. Mean first-try win rate over all seven levels, 40 runs a level, so
+3–4 points is noise. Careful Aim picks the best of 16 simulated angles, which no person can do, and
+careless is fully random, so real players land between the two columns.
+
+| Model | Careful | Careless | Gap | Median moves to win (careful) |
+| --- | --- | --- | --- | --- |
+| Belt | 60% | 57% | +3 | 29 |
+| Line | 61% | 42% | +19 | 29 |
+| Aim | 52% | 13% | +39 | 35 |
+| Echo | 40% | 24% | +16 | 46 |
+
+- **Belt:** nothing to decide. This is why auto-launch costs nothing.
+- **Line:** as winnable as the belt when played well, and it punishes carelessness. The existing level balance carries over.
+- **Aim:** the widest skill range and the hardest overall. One volley flies at a time and other colors are walls, so it is short of throughput, not over-powered.
+- **Echo:** in Echo the aiming is the placement, so "careful" is a bot that builds toward board lines whose picture lines still hold pixels, and "careless" is the normal placement bot. Planning is worth 16 points, but even planned play wins 40% against the belt's 60% and takes half again as many moves: you can only reach the lines you manage to clear. Widening the echo (`echoSpread: 1` or `2`, one or two extra picture lines each side) lifts the win rate to 42% and 49% but the careless bot rises to 39% and 48% with it, so the extra reach buys ease by removing the decision. Balance Echo through level design and picture size, not through reach.
+
 ## Read-outs and next tuning steps
 - **Level 1 is too hard for a first level.** Heart is a 74% first-try win; a tutorial level should be about 95%. Options: a smaller picture, per-level easier settings (bigger combo bonus, longer belt), or a guided first level.
 - **The curve is flat.** All seven levels sit between 41% and 74%, drifting down with pixel count rather than following a designed shape. Plan for a sawtooth: easy, easy, medium, then a "hard" level every 5th or so.

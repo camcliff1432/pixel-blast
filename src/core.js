@@ -76,6 +76,10 @@
     lineAim: false,     // Line: you pick the row or column a shooter fires down, and it empties into it
     lineFireGap: 0.26,  // seconds between shots from an emplaced shooter
     linePatience: 1.2,  // if it cannot hit anything for this long, unused ammo goes back to the queue
+    echo: false,        // Echo: no aiming step. The board line you clear fires down the same line of the picture,
+                        // and anything it cannot use is banked in the queue until your next clear
+    echoPatience: 0.5,  // seconds an echo shooter waits with nothing to hit before banking its ammo
+    echoSpread: 0,      // extra picture lines either side of the echoed band (0 = exact; see sim/agency.js for what 1 does)
     freeAim: false,     // Aim: drag to set an angle, the shooter's ammo fires as a bouncing volley
     ballSpeed: 11,      // picture cells per second
     ballGap: 0.07,      // seconds between balls in one volley
@@ -337,9 +341,42 @@
       }
       made.sort((a, b) => b.ammo - a.ammo);
       let lost = 0;
-      for (const s of made) if (!this.enqueue(s.color, s.ammo)) lost += s.ammo;
+      if (this.cfg.echo) {
+        // Echo: the shooters never wait in the queue. They fire at once down the picture lines
+        // that match the board lines just cleared, and whatever is banked in the queue goes too.
+        const t = this.echoTargets(rows, cols);
+        const ammo = {};
+        for (const s of made) ammo[s.color] = (ammo[s.color] || 0) + s.ammo;
+        for (const s of this.queue) ammo[s.color] = (ammo[s.color] || 0) + s.ammo;
+        this.queue.length = 0;
+        Object.keys(ammo).forEach((color, k) => {
+          this.emplaced.push({ id: ++this._id, color, ammo: ammo[color], slots: t.slots, si: k % t.slots.length, at: t.slots[k % t.slots.length], cd: 0.1 + k * 0.07, idle: 0, echo: true });
+        });
+        this.emit('echo', { picRows: t.picRows, picCols: t.picCols });
+      } else {
+        for (const s of made) if (!this.enqueue(s.color, s.ammo)) lost += s.ammo;
+      }
       this.shotsLost += lost;
       this.emit('clear', { cells, n, mono, mult, made, lost, bonusShots: mono * this.cfg.monoBonus * apb });
+    }
+    // Echo: which picture lines answer to these board lines. The board is 8 wide and pictures are
+    // 10 or 12, so each board line owns a band of one or two picture lines; every picture line
+    // belongs to exactly one board line, so nothing is out of reach. A row fires from both sides,
+    // a column from top and bottom.
+    echoTargets(rows, cols) {
+      const N = this.N, BN = this.BN, sp = this.cfg.echoSpread, rs = new Set(), cs = new Set(), slots = [];
+      for (let p = 0; p < N; p++) {
+        const b = Math.floor(p * BN / N);
+        for (let d = -sp; d <= sp; d++) {
+          if (p + d < 0 || p + d >= N) continue;
+          if (rows.includes(b)) rs.add(p + d);
+          if (cols.includes(b)) cs.add(p + d);
+        }
+      }
+      const picRows = [...rs].sort((a, b) => a - b), picCols = [...cs].sort((a, b) => a - b);
+      for (const p of picRows) slots.push(3 * N + (N - 1 - p), N + p);
+      for (const p of picCols) slots.push(p, 2 * N + (N - 1 - p));
+      return { picRows, picCols, slots };
     }
     checkJam() {
       const left = this.tray.filter(Boolean);
@@ -402,12 +439,18 @@
         e.cd -= dt;
         if (e.cd > 0) continue;
         const before = e.ammo;
-        this.tryFire(e, e.slot);
+        if (e.slots) {                      // Echo: several lines to choose from, taken in turn
+          for (let k = 0; k < e.slots.length && e.ammo === before; k++) {
+            const slot = e.slots[(e.si + k) % e.slots.length];
+            this.tryFire(e, slot);
+            if (e.ammo < before) { e.at = slot; e.si = (e.si + k + 1) % e.slots.length; }
+          }
+        } else this.tryFire(e, e.slot);
         if (e.ammo < before) { e.cd = this.cfg.lineFireGap; e.idle = 0; }
         else {
           e.cd = 0.08;
           e.idle += dt + 0.08;
-          if (e.idle >= this.cfg.linePatience) { // nothing left to hit from here: give the ammo back
+          if (e.idle >= (e.echo ? this.cfg.echoPatience : this.cfg.linePatience)) { // nothing left to hit from here: give the ammo back
             this.emplaced.splice(i, 1);
             if (this.enqueue(e.color, e.ammo)) this.emit('returned', { color: e.color, ammo: e.ammo });
             else { this.shotsLost += e.ammo; this.emit('lost', { color: e.color, ammo: e.ammo }); }
@@ -416,7 +459,7 @@
         }
         if (e.ammo <= 0) {
           this.emplaced.splice(i, 1);
-          this.emit('spentAt', { slot: e.slot, color: e.color });
+          this.emit('spentAt', { slot: e.slots ? e.at : e.slot, color: e.color });
         }
       }
     }
@@ -572,7 +615,7 @@
       if (this.status !== 'play') return;
       this.time += dt;
       if (this.cfg.freeAim) this.updateBalls(dt);
-      else if (this.cfg.lineAim) this.updateEmplaced(dt);
+      else if (this.cfg.lineAim || this.cfg.echo) this.updateEmplaced(dt);
       else {
         for (const s of this.belt) {
           s.pos += this.speed * dt;
