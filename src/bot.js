@@ -156,7 +156,7 @@
     };
   }
 
-  const api = { playGame, evaluate, chooseMove, chooseLaunch };
+  const api = { playGame, evaluate, chooseMove, chooseLaunch, scorePlacement };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.PBBot = api;
 })(typeof self !== 'undefined' ? self : this);

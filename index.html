@@ -96,7 +96,7 @@ const TRAY_Y = 680, TRAY_CELL = 20;
 // ---------- state ----------
 let mode = 'levels', game = null, levelIndex = 0, endless = false, testLevel = null;
 let modeKind = 'classic';   // 'classic' | 'sand' | 'boss' | 'strict' | 'duel' | 'line' | 'aim'
-const AIMY = new Set(['line', 'aim']); // modes where you choose the shot instead of riding the belt
+const AIMY = new Set(['line', 'aim', 'echo']); // modes where you choose the shot instead of riding the belt
 let storm = false;          // sandstorm run
 let duel = null;            // { kind, idx, seed, moves, secs } when playing a challenge link
 let shareLink = '', bestStorm = 0, autoLaunch = false;
@@ -131,7 +131,7 @@ function start(idx, isEndless, level, isTest, sn) {
   const lv = level || (isEndless ? LEVELS[Math.floor(Math.random() * LEVELS.length)] : LEVELS[idx]);
   // Duel runs use the seeded piece sequence, so two players on one seed get the same trays.
   game = new Game(lv, { sand: mk === 'sand', boss: mk === 'boss', strictQueue: mk === 'strict', fairPieces: mk === 'duel',
-    lineAim: mk === 'line', freeAim: mk === 'aim', autoLaunch: (!!sn || autoLaunch) && mk !== 'line' && mk !== 'aim' });
+    lineAim: mk === 'line', freeAim: mk === 'aim', echo: mk === 'echo', autoLaunch: (!!sn || autoLaunch) && !AIMY.has(mk) });
   selQ = -1; aimDrag = null;
   intro = sn && lv.intro || null;
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
@@ -309,6 +309,8 @@ function handleEvents() {
         fallOff.delete(`${f.x},${f.from}`);
         fallOff.set(`${f.x},${f.to}`, prev + (f.from - f.to));
       }
+    } else if (e.type === 'echo') {
+      effects.push({ type: 'band', rows: e.picRows, cols: e.picCols, t: 0 });
     } else if (e.type === 'ballHit') {
       const pc = PC();
       effects.push({ type: 'pix', x: PIC_X + e.x * pc, y: PIC_Y + e.y * pc, s: pc, color: e.pcolor, t: 0 });
@@ -322,7 +324,8 @@ function handleEvents() {
       const [x, y] = posXY(e.pos);
       effects.push({ type: 'poof', x, y, color: e.color, t: 0 });
     } else if (e.type === 'returned') {
-      toast('Unused shooter returned to queue', '#cbd5e1');
+      // In Echo this happens after most clears and the queue shows it, so a toast over the picture is noise.
+      if (!game.cfg.echo) toast('Unused shooter returned to queue', '#cbd5e1');
     } else if (e.type === 'lost') {
       toast(`Queue full — ${e.ammo} shots lost`, '#fca5a5');
     } else if (e.type === 'blocked') {
@@ -592,7 +595,7 @@ function render() {
   const n = N(), pc = PC();
 
   // HUD
-  const prefix = storm ? '' : (duel || game.cfg.fairPieces ? 'Duel · ' : '') + (game.cfg.lineAim ? 'Line · ' : game.cfg.freeAim ? 'Aim · ' : '')
+  const prefix = storm ? '' : (duel || game.cfg.fairPieces ? 'Duel · ' : '') + (game.cfg.lineAim ? 'Line · ' : game.cfg.freeAim ? 'Aim · ' : game.cfg.echo ? 'Echo · ' : '')
     + (game.bossMode ? 'Boss · ' : game.sandMode ? 'Sand · ' : game.cfg.strictQueue ? 'Strict · ' : '');
   const title = storm ? 'Sandstorm' : prefix + (testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : storyN ? `Level ${storyN}` : game.level.name);
   if (tut) { text('Skip', 16, 22, 14, '#93c5fd', 'left', '700'); buttons.push({ x: 8, y: 6, w: 70, h: 34, fn: skipTut }); } else text(title, 16, 22, 16, '#f1f5f9', 'left', '700');
@@ -641,6 +644,11 @@ function render() {
       ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
       const g = e.s * (0.6 + k * 1.6);
       ctx.strokeRect(e.x + e.s / 2 - g / 2, e.y + e.s / 2 - g / 2, g, g);
+      ctx.globalAlpha = 1;
+    } else if (e.type === 'band') {
+      ctx.globalAlpha = (1 - k) * 0.4; ctx.fillStyle = '#a7f3d0';
+      for (const p of e.rows) ctx.fillRect(PIC_X, PIC_Y + p * pc, PIC, pc);
+      for (const p of e.cols) ctx.fillRect(PIC_X + p * pc, PIC_Y, pc, PIC);
       ctx.globalAlpha = 1;
     } else if (e.type === 'ping') {
       ctx.globalAlpha = (1 - k) * 0.7;
@@ -706,6 +714,9 @@ function render() {
     }
   }
 
+  // ----- Echo mode: shooters sit on whichever edge of their band they last fired from -----
+  if (game.cfg.echo) for (const e of game.emplaced) { const [x, y] = slotXY(e.at); shooter(x, y, 10, e.color, e.ammo); }
+
   // ----- Aim mode: launcher, aiming ray, balls in flight -----
   if (game.cfg.freeAim) {
     const lx = PIC_X + game.launchX * pc, ly = PIC_Y + PIC;
@@ -745,6 +756,9 @@ function render() {
   } else if (game.cfg.freeAim) {
     text(selQ >= 0 ? 'DRAG FROM THE PICTURE TO AIM  ·  RELEASE TO FIRE' : game.volleyActive() ? 'VOLLEY IN FLIGHT…' : 'TAP A SHOOTER TO ARM IT',
       W / 2, 335, 10, selQ >= 0 ? '#a7f3d0' : '#64748b', 'center', '700');
+  } else if (game.cfg.echo) {
+    text(game.queue.length ? 'BANKED AMMO FIRES WITH YOUR NEXT CLEAR' : 'THE LINE YOU CLEAR FIRES DOWN THE SAME LINE OF THE PICTURE',
+      W / 2, 335, 10, game.queue.length ? '#a7f3d0' : '#64748b', 'center', '700');
   } else {
     const lbl = storyN || tut ? `BELT ${game.belt.length}/${game.beltCap}` : game.cfg.autoLaunch ? `AUTO-LAUNCH ON  ·  BELT ${game.belt.length}/${game.beltCap}  ·  tap to switch off`
       : `TAP A SHOOTER TO LAUNCH  ·  BELT ${game.belt.length}/${game.beltCap}  ·  auto: off`;
@@ -776,6 +790,22 @@ function render() {
     clearSet = new Set();
     for (const y of rows) for (let x = 0; x < BN; x++) clearSet.add(y * BN + x);
     for (const x of cols) for (let y = 0; y < BN; y++) clearSet.add(y * BN + x);
+    // Echo: before you let go, show on the picture which lines this clear would fire down, and
+    // ring the outer pixel at each end: bright if a color you'd be firing can take it.
+    if (game.cfg.echo && (rows.length || cols.length)) {
+      const t = game.echoTargets(rows, cols), have = new Set(game.queue.map(s => s.color));
+      for (const k of clearSet) have.add(tmp[(k / BN) | 0][k % BN]);
+      ctx.fillStyle = 'rgba(167,243,208,.16)';
+      for (const p of t.picRows) ctx.fillRect(PIC_X, PIC_Y + p * pc, PIC, pc);
+      for (const p of t.picCols) ctx.fillRect(PIC_X + p * pc, PIC_Y, pc, PIC);
+      for (const slot of t.slots) {
+        const hit = game.scanTarget(slot);
+        if (!hit) continue;
+        const can = have.has(RAINBOW) || have.has(game.pic[hit[1]][hit[0]]);
+        ctx.strokeStyle = can ? '#a7f3d0' : 'rgba(255,255,255,.28)'; ctx.lineWidth = can ? 2.5 : 1.5;
+        ctx.strokeRect(PIC_X + hit[0] * pc + 1.5, PIC_Y + hit[1] * pc + 1.5, pc - 3, pc - 3);
+      }
+    }
   }
   for (let y = 0; y < BN; y++) for (let x = 0; x < BN; x++) {
     const px = BX + x * BC, py = BY + y * BC;
@@ -901,9 +931,9 @@ function drawMenu() {
   // mode chips
   // Seven modes over two rows. Row 2 is the new shooting models.
   const rows = [[['Classic', 'classic'], ['Sand', 'sand'], ['Boss', 'boss'], ['Strict', 'strict']],
-                [['Duel', 'duel'], ['Line', 'line'], ['Aim', 'aim']]];
+                [['Duel', 'duel'], ['Line', 'line'], ['Aim', 'aim'], ['Echo', 'echo']]];
   rows.forEach((kinds, r) => {
-    const cw = r === 0 ? 84 : 94, by = 184 + r * 34;
+    const cw = 84, by = 184 + r * 34;
     kinds.forEach(([label, v], i) => {
       const bx = (W - (kinds.length * cw + (kinds.length - 1) * 6)) / 2 + i * (cw + 6);
       const on = modeKind === v, isNew = AIMY.has(v);
@@ -918,7 +948,8 @@ function drawMenu() {
     strict: 'Strict: 4-slot queue — if it\'s full, you can\'t clear lines',
     duel: 'Duel: fixed piece order — win, then challenge a friend to beat it',
     line: 'Line: tap a shooter, then tap an edge — it empties down that row or column',
-    aim: 'Aim: tap a shooter, then drag to aim. The balls bounce off colors that don\'t match' }[modeKind];
+    aim: 'Aim: tap a shooter, then drag to aim. The balls bounce off colors that don\'t match',
+    echo: 'Echo: the row or column you clear fires down the same line of the picture' }[modeKind];
   text(hint, W / 2, 256, 11, modeKind === 'classic' ? '#94a3b8' : '#fde68a', 'center', '600');
   // setting: auto-launch
   {
@@ -1081,6 +1112,7 @@ cv.addEventListener('pointerdown', e => {
   for (let i = 0; i < QN(); i++) {
     const qx = QX() + i * (QW + QG);
     if (x >= qx && x <= qx + QW && y >= QY && y <= QY + QH) {
+      if (game.cfg.echo) { if (i < game.queue.length) toast('Banked ammo fires with your next clear', '#a7f3d0'); return; }
       if (game.cfg.lineAim || game.cfg.freeAim) {       // arm it; the picture is where you choose
         if (i >= game.queue.length) return;
         selQ = selQ === i ? -1 : i;
