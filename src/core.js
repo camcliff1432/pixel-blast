@@ -81,6 +81,14 @@
     ballGap: 0.07,      // seconds between balls in one volley
     ballLife: 7,        // a ball gives up after this long, so a bad angle cannot stall the game
     ballBounceOnKill: true, // a matching pixel is destroyed and the ball bounces off it (Ballz-style)
+
+    // ---- special pixels ----
+    iceAnyColor: false, // frozen pixels: true = any shooter color cracks the ice, false = only the matching color
+    iceHits: 3,         // cracks a frozen pixel takes before it is a normal pixel
+    chameleonSecs: 2.5, // a chameleon pixel moves to the next color this often
+    goldCoins: 3,       // coins reported by the 'gold' event when a gold pixel breaks
+    goldHits: 10,       // hits a gold pixel takes to break
+    goldAnyColor: true, // gold pixels: any shooter color hits them (false = only the matching color)
   };
 
   function rngFrom(seed) {
@@ -169,6 +177,14 @@
       this.stormMode = !!this.cfg.storm;
       this.sandMode = !!(this.cfg.sand || level.sand || this.stormMode);
       this.bossMode = !!(this.cfg.boss || level.boss) && !this.stormMode;
+      const md = level.mods || [];
+      this.mods = this.pic.map((r, y) => r.map((c, x) => { const m = c && (md[y] || '')[x]; return m && m !== '.' ? m : null; }));
+      this.hidden = this.mods.map(r => r.map(m => m === 'H'));
+      this.ice = this.mods.map(r => r.map(m => (m === 'F' ? this.cfg.iceHits : 0)));
+      this.goldHp = this.mods.map(r => r.map(m => (m === 'G' ? this.cfg.goldHits : 0)));
+      this.locked = this.hasMod('K');
+      this.chamT = 0;
+      (level.boardIce || []).forEach((r, y) => [...r].forEach((c, x) => { if (c === '#' && !this.board[y][x]) this.board[y][x] = '#'; }));
       this.original = level.rows.map(r => [...r].map(c => (c === '.' ? null : c)));
       this.bossTimer = 0;
       this.bossInterval = this.cfg.bossInterval || autoBossInterval(pixelCount(level));
@@ -180,21 +196,26 @@
       this.speed = this.lap / this.lapSeconds;
       this.launchGapSlots = this.cfg.launchGap * this.N / 10;
       this.ammoPerBlock = level.ammoPerBlock || this.cfg.ammoPerBlock || autoAmmoPerBlock(level);
-      this.colors = KEYS.filter(k => level.rows.some(r => r.includes(k)));
+      this.colors = KEYS.filter(k => this.pic.some((r, y) => r.some((c, x) => c === k && this.mods[y][x] !== 'S')));
       if (!this.colors.length) this.colors = ['R'];
       // Fair pieces: the same weighting pickColor() would use on the untouched picture, frozen here.
       // It depends only on the level, so two players on one seed draw the same colors all run.
       const tally = {};
-      for (const row of this.pic) for (const c of row) if (c) tally[c] = (tally[c] || 0) + 1;
+      Object.assign(tally, this.remaining());
       this.colorWeights = this.colors.map(k => (tally[k] || 0) + this.cfg.colorNeedBonus * this.ammoPerBlock);
       this.colorWeightTotal = this.colorWeights.reduce((a, b) => a + b, 0) || 1;
+      this.expose();
     }
     nextPicture(level) { this.setPicture(level); if (this.status === 'won') this.status = 'play'; }
-    countPixels() { let n = 0; for (const r of this.pic) for (const c of r) if (c) n++; return n; }
-    remaining() {
+    hasMod(m) { return this.mods.some(r => r.includes(m)); }
+    // Stone and still-locked pixels can't be hit and block line of sight.
+    blocked(x, y) { const m = this.mods[y][x]; return m === 'S' || (m === 'L' && this.locked); }
+    countPixels() { let n = 0; this.pic.forEach((row, y) => row.forEach((c, x) => { if (c && this.mods[y][x] !== 'S') n++; })); return n; }
+    // Shots still needed per color: ice and gold hits count too when only the own color pays them. Stone never counts; knownOnly skips hidden pixels.
+    remaining(knownOnly) {
       const r = {};
       for (const k of this.colors) r[k] = 0;
-      for (const row of this.pic) for (const c of row) if (c) r[c] = (r[c] || 0) + 1;
+      this.pic.forEach((row, y) => row.forEach((c, x) => { const m = this.mods[y][x]; if (c && m !== 'S' && !(knownOnly && this.hidden[y][x])) r[c] = (r[c] || 0) + (m === 'G' ? (this.cfg.goldAnyColor ? 0 : this.goldHp[y][x]) : m === 'F' && !this.cfg.iceAnyColor ? 1 + this.ice[y][x] : 1); }));
       return r;
     }
     pendingAmmo() {
@@ -288,6 +309,7 @@
       const colors = new Set();
       for (const y of rows) for (let x = 0; x < this.BN; x++) colors.add(b[y][x]);
       for (const x of cols) for (let y = 0; y < this.BN; y++) colors.add(b[y][x]);
+      colors.delete('#');
       let need = 0;
       for (const c of colors) if (!(this.mergeQueue && this.queue.some(s => s.color === c))) need++;
       this.lastNeed = need;
@@ -311,20 +333,20 @@
       const seen = new Set(), cells = [], counts = {}, bonus = {};
       const add = (x, y) => {
         const k = y * BN + x;
-        if (!seen.has(k)) { seen.add(k); counts[B[y][x]] = (counts[B[y][x]] || 0) + 1; cells.push({ x, y, color: B[y][x] }); }
+        if (!seen.has(k)) { seen.add(k); if (B[y][x] !== '#') counts[B[y][x]] = (counts[B[y][x]] || 0) + 1; cells.push({ x, y, color: B[y][x] }); }
       };
       let mono = 0;
       for (const y of rows) {
         for (let x = 0; x < BN; x++) add(x, y);
         const c0 = B[y][0];
-        if (B[y].every(c => c === c0)) { bonus[c0] = (bonus[c0] || 0) + this.cfg.monoBonus * apb; mono++; }
+        if (c0 !== '#' && B[y].every(c => c === c0)) { bonus[c0] = (bonus[c0] || 0) + this.cfg.monoBonus * apb; mono++; }
       }
       for (const x of cols) {
         for (let y = 0; y < BN; y++) add(x, y);
         const c0 = B[0][x];
         let m = true;
         for (let y = 0; y < BN; y++) if (B[y][x] !== c0) m = false;
-        if (m) { bonus[c0] = (bonus[c0] || 0) + this.cfg.monoBonus * apb; mono++; }
+        if (m && c0 !== '#') { bonus[c0] = (bonus[c0] || 0) + this.cfg.monoBonus * apb; mono++; }
       }
       const mult = n >= 2 ? this.cfg.comboMult : 1;
       for (const c of cells) B[c.y][c.x] = null;
@@ -454,18 +476,14 @@
         if (cell) {
           const ox = Math.floor(b.x), oy = Math.floor(b.y);
           const crossedX = cx !== ox, crossedY = cy !== oy;
-          const match = b.color === RAINBOW || cell === b.color;
-          if (match) {
-            this.pic[cy][cx] = null;
+          const r = this.hit(cx, cy, b.color, kept => {
             b.ammoHit = (b.ammoHit || 0) + 1;
             this.shotsFired++;
             this.score += 5;
-            this.emit('ballHit', { x: cx, y: cy, color: b.color, pcolor: cell, bx: b.x, by: b.y });
-            if (this.sandMode) this.dropColumn(cx, cy);
-            if (!this.cfg.ballBounceOnKill) { b.x = nx; b.y = ny; continue; }
-          } else {
-            this.emit('ballBounce', { x: cx, y: cy, bx: b.x, by: b.y });
-          }
+            this.emit('ballHit', Object.assign({ x: cx, y: cy, color: b.color, pcolor: cell, bx: b.x, by: b.y }, kept ? { kept } : {}));
+          });
+          if (r === 'block') this.emit('ballBounce', { x: cx, y: cy, bx: b.x, by: b.y });
+          else if (r === 'break' && !this.cfg.ballBounceOnKill) { b.x = nx; b.y = ny; continue; }
           if (crossedY && !crossedX) b.vy = -b.vy;
           else if (crossedX && !crossedY) b.vx = -b.vx;
           else { b.vx = -b.vx; b.vy = -b.vy; }
@@ -510,7 +528,7 @@
       const set = new Set();
       for (let i = 0; i < this.lap; i++) {
         const t = this.scanTarget(i);
-        if (t) set.add(this.pic[t[1]][t[0]]);
+        if (t && !this.blocked(t[0], t[1])) set.add(this.pic[t[1]][t[0]]);
       }
       return set;
     }
@@ -523,25 +541,81 @@
         let to = yy;
         while (to + 1 < this.N && !this.pic[to + 1][x]) to++;
         if (to !== yy) {
-          this.pic[to][x] = c; this.pic[yy][x] = null;
+          const mv = (g, z) => { g[to][x] = g[yy][x]; g[yy][x] = z; };
+          mv(this.pic, null); mv(this.mods, null); mv(this.hidden, false); mv(this.ice, 0); mv(this.goldHp, 0);
           falls.push({ x, from: yy, to, color: c });
         }
       }
       if (falls.length) this.emit('fall', { falls });
     }
+    // A shot of `color` reaches (x, y): returns 'block' (nothing happens), 'keep' (cracked ice / gold hit,
+    // pixel stays) or 'break'. `shot(kept)` is called first when the shot lands, to spend ammo and emit.
+    hit(x, y, color, shot) {
+      if (this.blocked(x, y)) return 'block';
+      const m = this.mods[y][x], own = color === RAINBOW || this.pic[y][x] === color;
+      if (m === 'F' && this.ice[y][x] > 0) {
+        if (!own && !this.cfg.iceAnyColor) return 'block';
+        shot(true);
+        this.emit('crack', { x, y, ice: --this.ice[y][x] });
+        return 'keep';
+      }
+      if (m === 'G') {
+        if (!own && !this.cfg.goldAnyColor) return 'block';
+        if (this.goldHp[y][x] > 1) {
+          shot(true);
+          this.emit('goldHit', { x, y, left: --this.goldHp[y][x] });
+          return 'keep';
+        }
+      } else if (!own && m !== '*') return 'block';
+      shot(false);
+      this.breakCell(x, y);
+      return 'break';
+    }
+    // Destroy (x, y); a bomb takes its 8 neighbours too (chaining), except stone and locked pixels.
+    breakCell(x, y) {
+      const todo = [], extra = [], all = [[x, y]];
+      let key = false;
+      const kill = (X, Y) => {
+        const m = this.mods[Y][X];
+        this.pic[Y][X] = null; this.mods[Y][X] = null; this.hidden[Y][X] = false; this.ice[Y][X] = 0; this.goldHp[Y][X] = 0;
+        if (m === 'K') key = true;
+        if (m === 'G') this.emit('gold', { x: X, y: Y, coins: this.cfg.goldCoins });
+        return m;
+      };
+      if (kill(x, y) === 'X') todo.push([x, y]);
+      while (todo.length) {
+        const [bx, by] = todo.pop();
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const X = bx + dx, Y = by + dy;
+          if (!(this.pic[Y] && this.pic[Y][X]) || this.blocked(X, Y)) continue;
+          extra.push([X, Y, this.pic[Y][X]]); all.push([X, Y]);
+          if (kill(X, Y) === 'X') todo.push([X, Y]);
+        }
+      }
+      if (extra.length) this.emit('bomb', { x, y, cells: extra });
+      if (key && !this.hasMod('K')) { this.locked = false; this.emit('unlock', {}); }
+      if (this.sandMode) for (const [X, Y] of all) this.dropColumn(X, Y);
+      this.expose();
+    }
+    // Hidden pixels that have come into a line of sight are revealed for good.
+    expose() {
+      if (!this.hidden.some(r => r.includes(true))) return;
+      for (let i = 0; i < this.lap; i++) {
+        const t = this.scanTarget(i);
+        if (t && this.hidden[t[1]][t[0]]) { this.hidden[t[1]][t[0]] = false; this.emit('reveal', { x: t[0], y: t[1], color: this.pic[t[1]][t[0]] }); }
+      }
+    }
     tryFire(s, i) {
       if (s.ammo <= 0) return;
       const t = this.scanTarget(i);
       if (!t) return;
-      const [x, y] = t;
-      const pcolor = this.pic[y][x];
-      if (s.color !== RAINBOW && pcolor !== s.color) return;
-      this.pic[y][x] = null;
-      s.ammo--;
-      this.shotsFired++;
-      this.score += 5;
-      this.emit('fire', { slot: i, x, y, color: s.color, pcolor });
-      if (this.sandMode) this.dropColumn(x, y);
+      const [x, y] = t, pcolor = this.pic[y][x];
+      this.hit(x, y, s.color, kept => {
+        s.ammo--;
+        this.shotsFired++;
+        this.score += 5;
+        this.emit('fire', Object.assign({ slot: i, x, y, color: s.color, pcolor }, kept ? { kept } : {}));
+      });
     }
     // Boss: bring back one missing pixel, preferring ones touching the remaining picture.
     regrow() {
@@ -591,6 +665,13 @@
             else { this.shotsLost += s.ammo; this.emit('lost', { color: s.color, ammo: s.ammo }); }
           }
         }
+      }
+      for (this.chamT += dt; this.chamT >= this.cfg.chameleonSecs; this.chamT -= this.cfg.chameleonSecs) {
+        this.pic.forEach((row, y) => row.forEach((c, x) => {
+          if (this.mods[y][x] !== 'C') return;
+          row[x] = this.colors[(this.colors.indexOf(c) + 1) % this.colors.length];
+          this.emit('shift', { x, y, color: row[x] });
+        }));
       }
       if (this.bossMode && this.countPixels() > 0) {
         this.bossTimer += dt;

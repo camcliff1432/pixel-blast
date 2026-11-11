@@ -63,8 +63,9 @@ stays a plain web page. Every screen added to `index.html` before this is a scre
 
 ### Phase 2 — Production game design
 - [ ] 30–50 levels with a real curve (today: 41–74% bot win rate, drifting with pixel count rather than designed — see [docs/BALANCE.md](docs/BALANCE.md))
-- [ ] Level 1 at about 95%, not 74%
-- [ ] A new mechanic every ~10 levels: locked pixels, stone blocks, 2-color shooters
+- [x] Level 1 at about 95%, not 74% (story Level 1 is a 5×5 heart, ~93%; see [docs/STORY.md](docs/STORY.md))
+- [x] New mechanics as the levels climb: frozen, hidden, stone, bomb, rainbow, board ice, key/locked, chameleon, gold (one new feature per size band, from level 17)
+- [ ] Replace the generated story pictures with real art (they show a GENERATED chip on the level screen)
 - [ ] Original art style and sound — **there is no audio at all today**, and the art is placeholder
 - [ ] Meta: album chapters, boosters, daily puzzle (Duel's seeded piece order already does what a daily needs)
 - [ ] Monetization: rewarded ads on continue, coin packs, remove-ads
@@ -119,6 +120,7 @@ This phase, not the port, is the long pole — and it is what App Store guidelin
 ## Game modes
 
 **Built**
+- **Story:** the home screen. Numbered levels with picture size growing by band, a swipeable level screen, a tutorial, and special pixels that arrive mid-band. See [docs/STORY.md](docs/STORY.md).
 - **Classic:** clear the picture, using levels and an album.
 - **Sand:** pixels above a shot pixel fall down. A toggle on the menu, or `sand: true` on a level. It changes which pixels are exposed, so the order you shoot in matters.
 - **Endless:** pictures keep coming until the board jams.

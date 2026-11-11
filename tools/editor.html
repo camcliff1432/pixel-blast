@@ -132,7 +132,7 @@ function rows() { return cells.map(r => r.map(c => c || '.').join('')); }
 function slug(s) { return s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'level'; }
 
 // ---------- setup ----------
-for (const s of [8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 24, 28, 32]) $('size').add(new Option(`${s} × ${s}`, s));
+for (const s of [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 20, 24, 28, 32]) $('size').add(new Option(`${s} × ${s}`, s));
 for (let k = 2; k <= KEYS.length; k++) $('maxColors').add(new Option(`${k} colors`, k));
 $('maxColors').value = 6;
 PB_LEVELS.forEach((l, i) => $('preset').add(new Option(`${l.name} (${l.rows.length}×${l.rows.length})`, i)));

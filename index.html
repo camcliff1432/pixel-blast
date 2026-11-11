@@ -12,17 +12,38 @@
   html,body{margin:0;height:100%;background:#12141a;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-touch-callout:none}
   body{display:flex;align-items:center;justify-content:center}
   canvas{display:block;touch-action:none}
+  #dev{display:flex;align-items:center;justify-content:center;background:#12141a;overflow:hidden}
+  body.framed{background:#fff}
+  body.framed #dev{border:10px solid #1f2430;box-shadow:0 18px 50px rgba(0,0,0,.28)}
+  #dev{position:relative}
+  #splash{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:22px;border:0;background:#12141a;color:#f8fafc;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;cursor:pointer;transition:opacity .35s}
+  #splash:disabled{cursor:default}
+  #splash h1{margin:0;font-size:44px;font-weight:800}
+  #splash .px{display:flex;gap:6px}
+  #splash .px i{width:22px;height:22px;border-radius:5px;animation:bob 1s ease-in-out infinite}
+  #splash .px i:nth-child(2){animation-delay:.15s}#splash .px i:nth-child(3){animation-delay:.3s}#splash .px i:nth-child(4){animation-delay:.45s}
+  #splash p{margin:0;font-size:15px;font-weight:700;color:#94a3b8}
+  #splash:not(:disabled) p{color:#fde68a;animation:blink 1.4s ease-in-out infinite}
+  #splash.gone{opacity:0;pointer-events:none}
+  @keyframes bob{50%{transform:translateY(-8px)}}
+  @keyframes blink{50%{opacity:.35}}
+  @media (prefers-reduced-motion:reduce){#splash .px i,#splash p{animation:none!important}}
+  #view{position:fixed;top:12px;right:12px;font:600 14px system-ui,sans-serif;padding:8px 10px;border:1px solid #cbd5e1;border-radius:8px;background:#fff;color:#111827}
 </style>
 </head>
 <body>
-<canvas id="c"></canvas>
+<div id="dev"><canvas id="c"></canvas>
+  <button id="splash" disabled><span class="px"><i style="background:#ef4444"></i><i style="background:#facc15"></i><i style="background:#22c55e"></i><i style="background:#3b82f6"></i></span><h1>Pixel Blast</h1><p>Loading…</p></button>
+</div>
+<select id="view" aria-label="Screen view"><option value="phone">Phone</option><option value="ipad">iPad</option><option value="full">Full Window</option></select>
 <script src="src/core.js"></script>
 <script src="src/levels.js"></script>
 <script src="src/economy.js"></script>
+<script src="src/story.js"></script>
 <script>
 (() => {
 'use strict';
-const { Game, PALETTE, RAINBOW, fullLines, stormLevel } = PBCore;
+const { Game, PALETTE, RAINBOW, fullLines, stormLevel, shapeSize } = PBCore;
 const LEVELS = PB_LEVELS;
 
 const ECON = PB_ECON; // prices and rewards: src/economy.js
@@ -31,9 +52,27 @@ const ECON = PB_ECON; // prices and rewards: src/economy.js
 const W = 400, H = 780;
 const cv = document.getElementById('c'), ctx = cv.getContext('2d');
 let scale = 1, dpr = 1;
+// Desktop only: preview the game inside a phone or iPad sized screen. [width, height, corner radius] in CSS px.
+const VIEWS = { phone: [390, 844, 46], ipad: [820, 1180, 30] };
+const dev = document.getElementById('dev'), viewSel = document.getElementById('view');
+let view = 'full';
+if (matchMedia('(hover: hover) and (pointer: fine)').matches) { try { view = localStorage.getItem('pb-view') || 'phone'; } catch (_) { view = 'phone'; } }
+else viewSel.hidden = true;
+viewSel.value = view;
+viewSel.onchange = () => { view = viewSel.value; try { localStorage.setItem('pb-view', view); } catch (_) {} viewSel.blur(); resize(); };
 function resize() {
   dpr = window.devicePixelRatio || 1;
-  scale = Math.min(window.innerWidth / W, window.innerHeight / H);
+  const v = VIEWS[view];
+  let aw = window.innerWidth, ah = window.innerHeight;
+  document.body.classList.toggle('framed', !!v);
+  dev.style.borderRadius = '0';
+  if (v) {
+    const k = Math.min(1, (aw - 100) / (v[0] + 20), (ah - 80) / (v[1] + 20));
+    aw = v[0] * k; ah = v[1] * k;
+    dev.style.borderRadius = v[2] * k + 'px';
+  }
+  dev.style.width = aw + 'px'; dev.style.height = ah + 'px';
+  scale = Math.min(aw / W, ah / H);
   cv.style.width = (W * scale) + 'px';
   cv.style.height = (H * scale) + 'px';
   cv.width = Math.round(W * scale * dpr);
@@ -42,7 +81,7 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-const COL = Object.assign({ [RAINBOW]: '#f8fafc' }, PALETTE);
+const COL = Object.assign({ [RAINBOW]: '#f8fafc', '?': '#2c313d', '@': '#7b8190', '#': '#bfe6f7', '$': '#fbbf24' }, PALETTE); // ? hidden, @ stone, # board ice, $ gold
 const RAINBOW_RING = ['R', 'Y', 'G', 'B'];
 const LIGHT = new Set(['Y', 'L', 'A', 'K', 'O']); // colors that need dark text on top
 
@@ -55,7 +94,7 @@ const BN = 8, BC = 34, BX = (W - BN * BC) / 2, BY = 398;
 const TRAY_Y = 680, TRAY_CELL = 20;
 
 // ---------- state ----------
-let mode = 'menu', game = null, levelIndex = 0, endless = false, testLevel = null;
+let mode = 'levels', game = null, levelIndex = 0, endless = false, testLevel = null;
 let modeKind = 'classic';   // 'classic' | 'sand' | 'boss' | 'strict' | 'duel' | 'line' | 'aim'
 const AIMY = new Set(['line', 'aim']); // modes where you choose the shot instead of riding the belt
 let storm = false;          // sandstorm run
@@ -67,30 +106,41 @@ let hoverSlot = null;       // Line: the edge slot under the pointer, previewed 
 let fallOff = new Map(); // sand mode: 'x,y' -> remaining fall distance in cells (negative)
 let effects = [], projs = [], toasts = [], drag = null, buttons = [], time = 0, winDelay = 0;
 let coins = ECON.startCoins, streak = 0, album = new Set(), result = null;
+let tut = null, tutorialDone = false; // tut: { step } while the tutorial runs
+let intro = null, goldToast = false; // intro: feature letter of the intro card being shown
+let storyLevel = 1, viewN = 1, storyN = null, slide = 0, swipeX = null; // current story level, browsed level, running story level
 try {
   const s = JSON.parse(localStorage.getItem('pixelblast-meta-v3') || 'null');
-  if (s) { coins = s.coins; streak = s.streak; album = new Set(s.album); bestStorm = s.bestStorm || 0; autoLaunch = !!s.autoLaunch; }
+  if (s) { coins = s.coins; streak = s.streak; album = new Set(s.album); bestStorm = s.bestStorm || 0; autoLaunch = !!s.autoLaunch; tutorialDone = !!s.tutorialDone; storyLevel = Math.max(1, s.storyLevel | 0); }
 } catch (_) {}
+viewN = storyLevel;
 function saveMeta() {
-  try { localStorage.setItem('pixelblast-meta-v3', JSON.stringify({ coins, streak, album: [...album], bestStorm, autoLaunch })); } catch (_) {}
+  try { localStorage.setItem('pixelblast-meta-v3', JSON.stringify({ coins, streak, album: [...album], bestStorm, autoLaunch, storyLevel, tutorialDone })); } catch (_) {}
 }
 const streakMult = s => Math.min(ECON.streakCap, 1 + ECON.streakStep * Math.max(0, s - 1));
 const continueCost = () => game ? ECON.continueCosts[game.continues] : null; // undefined when out of continues
 const N = () => game.N, PC = () => PIC / game.N;
 
-function start(idx, isEndless, level, isTest) {
+function start(idx, isEndless, level, isTest, sn) {
+  const mk = sn ? 'classic' : modeKind;
+  storyN = sn || null;
   testLevel = isTest ? level : null; // only a real play-test keeps the test flag
   endless = !!isEndless;
   levelIndex = idx;
   storm = false; duel = null; shareLink = '';
   const lv = level || (isEndless ? LEVELS[Math.floor(Math.random() * LEVELS.length)] : LEVELS[idx]);
   // Duel runs use the seeded piece sequence, so two players on one seed get the same trays.
-  game = new Game(lv, { sand: modeKind === 'sand', boss: modeKind === 'boss', strictQueue: modeKind === 'strict', fairPieces: modeKind === 'duel',
-    lineAim: modeKind === 'line', freeAim: modeKind === 'aim', autoLaunch: autoLaunch && modeKind !== 'line' && modeKind !== 'aim' });
+  game = new Game(lv, { sand: mk === 'sand', boss: mk === 'boss', strictQueue: mk === 'strict', fairPieces: mk === 'duel',
+    lineAim: mk === 'line', freeAim: mk === 'aim', autoLaunch: (!!sn || autoLaunch) && mk !== 'line' && mk !== 'aim' });
   selQ = -1; aimDrag = null;
+  intro = sn && lv.intro || null;
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
+  goldToast = !!(game.mods && game.mods.some(r => r.includes('G')));
 }
+const startStory = n => start(0, false, PB_STORY.level(n), false, n);
+const toLevels = () => { viewN = storyLevel; mode = 'levels'; drag = null; tut = null; };
+const goLevel = d => { if (viewN + d >= 1) { viewN += d; slide = d * 60; } };
 function useBooster(kind) {
   if (mode !== 'play') return;
   const cost = ECON.booster[kind];
@@ -106,16 +156,70 @@ function useBooster(kind) {
   saveMeta();
 }
 function startStorm() {
-  testLevel = null; endless = false;
+  testLevel = null; endless = false; storyN = null;
   const seed = Math.floor(Math.random() * 1e9);
   game = new Game(stormLevel(seed, 12), { storm: true, seed, autoLaunch });
   storm = true; duel = null; shareLink = '';
   effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
   mode = 'play';
 }
+// ---------- tutorial ----------
+const TUTORIAL = { id: 'tutorial', name: 'Tutorial', rows: ['..Y..', '.YRY.', 'YRRRY', '.YRY.', '.YYY.'] };
+const TUT_HINTS = ['This is your picture. Break every pixel to win.', 'Drag the yellow block into the gap to fill the row.', 'Full rows turn into shooters. Tap the shooter to launch it.',
+  'Shooters circle the picture and hit pixels of their own color. The yellow is hiding the red.', 'Now the red is exposed. Fill the row with red, then launch it.', ''];
+function startTutorial() {
+  testLevel = null; endless = false; storyN = null; storm = false; duel = null; shareLink = '';
+  game = new Game(TUTORIAL, { seed: 7 });
+  game.tray = [null, null, null];
+  selQ = -1; aimDrag = null; intro = null;
+  effects = []; projs = []; toasts = []; drag = null; winDelay = 0; result = null; fallOff = new Map();
+  tut = { step: 0 }; mode = 'play';
+}
+function skipTut() { tutorialDone = true; saveMeta(); toLevels(); }
+function tutStep(n) {
+  tut.step = n;
+  const fill = (c, gap) => { game.board[7] = game.board[7].map((_, x) => (gap.includes(x) ? null : c)); };
+  const piece = (c, sh) => Object.assign({ sh, color: c }, shapeSize(sh));
+  if (n === 1) { fill('Y', [3]); game.tray = [piece('Y', [[0, 0]]), null, null]; }
+  else if (n === 2) game.tray = [null, null, null];
+  else if (n === 4) { game.belt = []; game.queue = []; fill('R', [3, 4]); game.tray = [null, piece('R', [[0, 0], [1, 0]]), null]; }
+}
+function tutCheck() {
+  const s = tut.step;
+  if (s === 1 && game.queue.length) tutStep(2);
+  else if (s === 2 && game.belt.length) tutStep(3);
+  else if (s === 3 && !game.pic.some(r => r.includes('Y'))) tutStep(4);
+  else if (s === 4 && game.belt.length) tutStep(5);
+}
+// The only legal drop right now as [x, y, width], or null.
+const tutGap = () => (tut && (tut.step === 1 || tut.step === 4) && !game.queue.length && !game.belt.length ? [3, 7, tut.step === 1 ? 1 : 2] : null);
+function pulse(x, y, w, h) {
+  ctx.globalAlpha = 0.55 + 0.45 * Math.sin(time * 6);
+  rr(x - 3, y - 3, w + 6, h + 6, 10); ctx.strokeStyle = '#fde68a'; ctx.lineWidth = 3; ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+function drawTut() {
+  const s = tut.step, gap = tutGap(), idle = !gap && game.queue.length && !game.belt.length;
+  const hint = s === 3 && idle ? 'It has ammo left. Tap it again.' : TUT_HINTS[s];
+  if (s === 0 || (s === 3 && !idle)) pulse(PIC_X, PIC_Y, PIC, PIC);
+  if (gap) {
+    pulse(BX + gap[0] * BC, BY + gap[1] * BC, gap[2] * BC, BC);
+    game.tray.forEach((p, i) => p && pulse((i + 0.5) * (W / 3) - p.w * TRAY_CELL / 2, TRAY_Y + 50 - p.h * TRAY_CELL / 2, p.w * TRAY_CELL, p.h * TRAY_CELL));
+  }
+  if (idle) pulse(QX(), QY, QW, QH);
+  if (!hint) return;
+  ctx.font = '600 15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif';
+  const lines = []; let row = '';
+  for (const w of hint.split(' ')) { if (row && ctx.measureText(row + ' ' + w).width > 280) { lines.push(row); row = w; } else row = row ? row + ' ' + w : w; }
+  lines.push(row);
+  const y = 412, h = 24 + lines.length * 22 + (s === 0 ? 58 : 0);
+  rr(40, y, 320, h, 14); ctx.fillStyle = '#1f2430'; ctx.fill(); ctx.strokeStyle = '#a7f3d0'; ctx.lineWidth = 2; ctx.stroke();
+  lines.forEach((l, i) => text(l, W / 2, y + 24 + i * 22, 15, '#f1f5f9', 'center', '600'));
+  if (s === 0) button('Next', 70, y + h - 56, 260, 46, () => tutStep(1), true);
+}
 const KIND_LETTER = { classic: 'c', sand: 's', boss: 'b', strict: 't', duel: 'd' }, LETTER_KIND = { c: 'classic', s: 'sand', b: 'boss', t: 'strict', d: 'duel' };
 function startDuel(d) {
-  testLevel = null; endless = false; storm = false; shareLink = '';
+  testLevel = null; storyN = null; endless = false; storm = false; shareLink = '';
   levelIndex = d.idx;
   // Always fair: a received challenge has to be the same game the other player got.
   game = new Game(LEVELS[d.idx], { seed: d.seed, sand: d.kind === 'sand', boss: d.kind === 'boss', strictQueue: d.kind === 'strict', fairPieces: true, autoLaunch });
@@ -198,7 +302,7 @@ function handleEvents() {
       if (e.lost) toast(`Queue full — ${e.lost} shots lost`, '#fca5a5');
     } else if (e.type === 'fire') {
       const [sx, sy] = slotXY(e.slot), pc = PC();
-      projs.push({ sx, sy, tx: PIC_X + e.x * pc + pc / 2, ty: PIC_Y + e.y * pc + pc / 2, px: e.x, py: e.y, color: e.color, pcolor: e.pcolor, t: 0 });
+      projs.push({ sx, sy, tx: PIC_X + e.x * pc + pc / 2, ty: PIC_Y + e.y * pc + pc / 2, px: e.x, py: e.y, color: e.color, pcolor: e.pcolor, kept: e.kept, t: 0 });
     } else if (e.type === 'fall') {
       for (const f of e.falls) {
         const prev = fallOff.get(`${f.x},${f.from}`) || 0;
@@ -228,6 +332,25 @@ function handleEvents() {
       effects.push({ type: 'grow', x: PIC_X + e.x * pc, y: PIC_Y + e.y * pc, s: pc, color: e.color, t: 0 });
     } else if (e.type === 'spawn') {
       fallOff.set(`${e.x},${e.y}`, -(e.y + 1.5));
+    } else if (e.type === 'reveal') {
+      effects.push({ type: 'flip', ...cellFx(e), color: e.color, t: 0 });
+    } else if (e.type === 'crack') {
+      effects.push({ type: 'shard', ...cellFx(e), t: 0 });
+    } else if (e.type === 'goldHit') {
+      effects.push({ type: 'shard', ...cellFx(e), t: 0 }, { type: 'ping', ...cellFx(e, 0.5), t: 0 });
+    } else if (e.type === 'bomb') {
+      const pc = PC();
+      effects.push({ type: 'blast', x: PIC_X + (e.x + 0.5) * pc, y: PIC_Y + (e.y + 0.5) * pc, r: pc * 1.8, t: 0 });
+      for (const [cx, cy, color] of e.cells) effects.push({ type: 'pix', ...cellFx({ x: cx, y: cy }), color, t: 0 });
+    } else if (e.type === 'shift') {
+      effects.push({ type: 'ping', ...cellFx(e, 0.5), t: 0 });
+    } else if (e.type === 'unlock') {
+      toast('Unlocked!', '#a7f3d0');
+      game.mods.forEach((r, y) => r.forEach((m, x) => { if (m === 'L') effects.push({ type: 'grow', ...cellFx({ x, y }), t: 0 }); }));
+    } else if (e.type === 'gold') {
+      coins += e.coins; saveMeta();
+      const pc = PC();
+      effects.push({ type: 'float', x: PIC_X + (e.x + 0.5) * pc, y: PIC_Y + e.y * pc, text: `+${e.coins}`, life: 1, t: 0 });
     } else if (e.type === 'surge') {
       toast(`Jammed! Sand surge: +${e.n} pixels`, '#fdba74');
     } else if (e.type === 'buried') {
@@ -244,7 +367,9 @@ function handleEvents() {
     }
   }
 }
+const cellFx = (e, half) => { const pc = PC(); return { x: PIC_X + e.x * pc + (half ? pc / 2 : 0), y: PIC_Y + e.y * pc + (half ? pc / 2 : 0), s: pc }; };
 function finishWin() {
+  if (tut) { tutorialDone = true; saveMeta(); mode = 'win'; drag = null; return; }
   if (endless) {
     coins += ECON.endlessPerPicture;
     album.add(game.level.name);
@@ -266,9 +391,10 @@ function finishWin() {
   streak++;
   const mult = streakMult(streak);
   const reward = Math.round(ECON.winBase * mult);
-  const isNew = !album.has(game.level.name);
+  const isNew = !storyN && !album.has(game.level.name);
   coins += reward;
-  album.add(game.level.name);
+  if (!storyN) album.add(game.level.name);
+  else if (storyN === storyLevel) storyLevel++;
   saveMeta();
   result = { reward, mult, isNew };
 }
@@ -280,11 +406,11 @@ function updateFx(dt) {
     p.t += dt / 0.14;
     if (p.t >= 1) {
       const pc = PC();
-      effects.push({ type: 'pix', x: PIC_X + p.px * pc, y: PIC_Y + p.py * pc, s: pc, color: p.pcolor, t: 0 });
+      if (!p.kept) effects.push({ type: 'pix', x: PIC_X + p.px * pc, y: PIC_Y + p.py * pc, s: pc, color: p.pcolor, t: 0 });
       projs.splice(i, 1);
     }
   }
-  for (let i = effects.length - 1; i >= 0; i--) { effects[i].t += dt; if (effects[i].t > 0.4) effects.splice(i, 1); }
+  for (let i = effects.length - 1; i >= 0; i--) { effects[i].t += dt; if (effects[i].t > (effects[i].life || 0.4)) effects.splice(i, 1); }
   for (let i = toasts.length - 1; i >= 0; i--) { toasts[i].t += dt; if (toasts[i].t > 1.8) toasts.splice(i, 1); }
   for (const [k, v] of fallOff) { const nv = v + dt * 16; if (nv >= 0) fallOff.delete(k); else fallOff.set(k, nv); }
 }
@@ -321,6 +447,73 @@ function block(x, y, s, c, alpha = 1) {
   ctx.fill();
   ctx.globalAlpha = 1;
 }
+// A picture pixel with its special look. m: mod letter; hid/ice/lock/hp: its current state.
+function pixel(x, y, s, c, m, hid, ice, lock, hp) {
+  const cx = x + s / 2, cy = y + s / 2, big = s >= 11;
+  if (hid) { block(x, y, s, '?'); if (big) text('?', cx, cy + 0.5, s * 0.55, '#64748b', 'center', '800'); return; }
+  if (m === 'S') {
+    block(x, y, s, '@');
+    if (big) {
+      ctx.fillStyle = 'rgba(0,0,0,.28)'; rr(x + 1, y + s * 0.55, s - 2, s * 0.45 - 1, Math.min(6, s * 0.2)); ctx.fill();
+      for (const [a, b] of [[.3, .3], [.65, .5], [.4, .75], [.75, .25]]) ctx.fillRect(x + a * s, y + b * s, Math.max(1.5, s * 0.08), Math.max(1.5, s * 0.08));
+    }
+    return;
+  }
+  if (m === '*') {
+    block(x, y, s, RAINBOW);
+    const i = big ? 3 : 0.4, h = (s - 2 * i) / 2;
+    RAINBOW_RING.forEach((k, j) => { ctx.fillStyle = COL[k]; ctx.fillRect(x + i + (j % 2) * h, y + i + (j >> 1) * h, h, h); });
+    return;
+  }
+  if (m === 'G') {
+    block(x, y, s, '$');
+    if (!big) return;
+    ctx.strokeStyle = '#b45309'; ctx.lineWidth = 2; rr(x + 2, y + 2, s - 4, s - 4, Math.min(5, s * 0.2)); ctx.stroke();
+    text(String(hp == null ? 10 : hp), cx, cy + s * 0.06, s * 0.5, '#78350f', 'center', '800');
+    ctx.fillStyle = '#fff'; ctx.globalAlpha = 0.6 + 0.4 * Math.sin(time * 5 + x); const r = s * 0.14, gx = x + s * 0.76, gy = y + s * 0.26;
+    ctx.beginPath(); ctx.moveTo(gx, gy - r); ctx.lineTo(gx + r * 0.3, gy - r * 0.3); ctx.lineTo(gx + r, gy); ctx.lineTo(gx + r * 0.3, gy + r * 0.3); ctx.lineTo(gx, gy + r); ctx.lineTo(gx - r * 0.3, gy + r * 0.3); ctx.lineTo(gx - r, gy); ctx.lineTo(gx - r * 0.3, gy - r * 0.3); ctx.fill();
+    ctx.globalAlpha = 1;
+    return;
+  }
+  block(x, y, s, c);
+  if (m === 'F' && ice > 0) {
+    ctx.fillStyle = 'rgba(186,230,253,.55)'; ctx.fillRect(x + 0.4, y + 0.4, s - 0.8, s - 0.8);
+    if (big) {
+      ctx.strokeStyle = 'rgba(255,255,255,.95)'; ctx.lineWidth = Math.max(1, s * 0.05); ctx.beginPath();
+      if (ice < 3) { ctx.moveTo(x + s * .2, y + s * .15); ctx.lineTo(x + s * .5, y + s * .5); ctx.lineTo(x + s * .4, y + s * .85); }
+      if (ice < 2) { ctx.moveTo(x + s * .85, y + s * .2); ctx.lineTo(x + s * .5, y + s * .5); ctx.lineTo(x + s * .8, y + s * .8); }
+      ctx.stroke();
+      const bw = Math.max(2, s * 0.1);
+      ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = bw; rr(x + 1 + bw / 2, y + 1 + bw / 2, s - 2 - bw, s - 2 - bw, Math.min(6, s * 0.2)); ctx.stroke();
+      ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.beginPath(); ctx.moveTo(x + s - 2, y + 2); ctx.lineTo(x + s - 2 - s * .3, y + 2); ctx.lineTo(x + s - 2, y + 2 + s * .3); ctx.fill();
+    } else { ctx.strokeStyle = '#38bdf8'; ctx.lineWidth = 1.5; ctx.strokeRect(x + 1, y + 1, s - 2, s - 2); }
+  } else if (m === 'X') {
+    ctx.fillStyle = '#0b0d12'; ctx.beginPath(); ctx.arc(cx, cy + s * 0.05, s * (big ? 0.2 : 0.25), 0, Math.PI * 2); ctx.fill();
+    if (big) {
+      ctx.strokeStyle = '#0b0d12'; ctx.lineWidth = 1.5; ctx.beginPath(); ctx.moveTo(cx, cy - s * 0.12); ctx.quadraticCurveTo(cx + s * 0.1, cy - s * 0.3, cx + s * 0.2, cy - s * 0.28); ctx.stroke();
+      ctx.fillStyle = '#fbbf24'; ctx.fillRect(cx + s * 0.17, cy - s * 0.32, 3, 3);
+    }
+  } else if (m === 'C' && big) {
+    ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.beginPath(); ctx.ellipse(cx, cy + s * 0.08, s * 0.26, s * 0.15, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = '#111827'; ctx.beginPath(); ctx.arc(cx + Math.sin(time * 2) * s * 0.08, cy + s * 0.08, s * 0.09, 0, Math.PI * 2); ctx.fill();
+  } else if (m === 'K' && big) {
+    glyph(() => { ctx.beginPath(); ctx.arc(cx - s * 0.12, cy, s * 0.13, 0, Math.PI * 2); ctx.moveTo(cx + s * 0.01, cy); ctx.lineTo(cx + s * 0.3, cy); ctx.moveTo(cx + s * 0.22, cy); ctx.lineTo(cx + s * 0.22, cy + s * 0.12); });
+  } else if (m === 'L') {
+    if (lock) { ctx.fillStyle = 'rgba(15,17,22,.55)'; ctx.fillRect(x + 0.4, y + 0.4, s - 0.8, s - 0.8); }
+    if (big) {
+      const o = lock ? 0 : -s * 0.08;
+      glyph(() => { ctx.beginPath(); ctx.arc(cx, cy - s * 0.04 + o, s * 0.13, Math.PI, 0); ctx.moveTo(cx - s * 0.13, cy - s * 0.04 + o); ctx.lineTo(cx - s * 0.13, cy); }, () => { ctx.beginPath(); ctx.rect(cx - s * 0.2, cy, s * 0.4, s * 0.26); });
+    }
+  }
+}
+// Dark-outlined white line glyph; an optional second path is filled (padlock body).
+function glyph(line, body) {
+  ctx.lineWidth = 3.5; ctx.strokeStyle = '#0b0d12'; line(); ctx.stroke();
+  if (body) { body(); ctx.fillStyle = '#0b0d12'; ctx.fill(); ctx.stroke(); }
+  ctx.lineWidth = 1.6; ctx.strokeStyle = '#fff'; line(); ctx.stroke();
+  if (body) { body(); ctx.fillStyle = '#fff'; ctx.fill(); }
+}
+const modAt = (x, y) => (game.mods && game.mods[y] && game.mods[y][x]) || null;
 function text(t, x, y, size, color, align = 'center', weight = '600') {
   ctx.font = `${weight} ${size}px system-ui,-apple-system,Segoe UI,Roboto,sans-serif`;
   ctx.fillStyle = color;
@@ -381,7 +574,8 @@ function drawThumb(level, x, y, s, revealed) {
   for (let yy = 0; yy < n; yy++) for (let xx = 0; xx < n; xx++) {
     const ch = rows[yy][xx];
     if (ch === '.') continue;
-    ctx.fillStyle = revealed ? COL[ch] : '#2c313d';
+    const m = level.mods && level.mods[yy][xx];
+    ctx.fillStyle = revealed && m !== 'H' ? COL[m === 'S' ? '@' : ch] : '#2c313d';
     ctx.fillRect(x + xx * c, y + yy * c, c - 0.5, c - 0.5);
   }
   if (!revealed) text('?', x + s / 2, y + s / 2, 20, '#64748b', 'center', '800');
@@ -394,22 +588,25 @@ function render() {
   ctx.fillStyle = '#12141a';
   ctx.fillRect(0, 0, W, H);
   if (mode === 'menu') { drawMenu(); return; }
+  if (mode === 'levels') { drawLevels(); drawToasts(); return; }
   const n = N(), pc = PC();
 
   // HUD
   const prefix = storm ? '' : (duel || game.cfg.fairPieces ? 'Duel · ' : '') + (game.cfg.lineAim ? 'Line · ' : game.cfg.freeAim ? 'Aim · ' : '')
     + (game.bossMode ? 'Boss · ' : game.sandMode ? 'Sand · ' : game.cfg.strictQueue ? 'Strict · ' : '');
-  const title = storm ? 'Sandstorm' : prefix + (testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : game.level.name);
-  text(title, 16, 22, 16, '#f1f5f9', 'left', '700');
+  const title = storm ? 'Sandstorm' : prefix + (testLevel ? `Test · ${game.level.name}` : endless ? `Endless · ${game.level.name}` : storyN ? `Level ${storyN}` : game.level.name);
+  if (tut) { text('Skip', 16, 22, 14, '#93c5fd', 'left', '700'); buttons.push({ x: 8, y: 6, w: 70, h: 34, fn: skipTut }); } else text(title, 16, 22, 16, '#f1f5f9', 'left', '700');
   const t = Math.floor(game.time), clock = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
   const sub = storm ? `${clock} survived · ${game.shotsFired} blasted · best ${Math.floor(bestStorm / 60)}:${String(bestStorm % 60).padStart(2, '0')}`
     : duel ? `${game.countPixels()} px left · ${game.moves} moves (beat ${duel.moves})`
     : `${game.countPixels()} px left`;
   text(sub, 16, 42, 11, storm ? '#fdba74' : duel ? '#a7f3d0' : '#94a3b8', 'left', '700');
   text(`${game.score}`, W - 52, 26, 17, '#fde68a', 'right', '800');
-  rr(W - 42, 12, 30, 28, 8); ctx.fillStyle = '#262a35'; ctx.fill();
-  text('☰', W - 27, 26, 16, '#e2e8f0');
-  buttons.push({ x: W - 42, y: 12, w: 30, h: 28, fn: () => { leaveRun(); mode = 'menu'; drag = null; } });
+  if (!tut) {
+    rr(W - 42, 12, 30, 28, 8); ctx.fillStyle = '#262a35'; ctx.fill();
+    text('☰', W - 27, 26, 16, '#e2e8f0');
+    buttons.push({ x: W - 42, y: 12, w: 30, h: 28, fn: () => { leaveRun(); if (storyN) toLevels(); else { mode = 'menu'; drag = null; } } });
+  }
 
   // belt track
   const bx = PIC_X - BELT, by = PIC_Y - BELT, bw = PIC + 2 * BELT;
@@ -431,11 +628,11 @@ function render() {
     const c = game.pic[y][x];
     if (!c) continue;
     const off = fallOff.size ? (fallOff.get(`${x},${y}`) || 0) : 0;
-    block(PIC_X + x * pc, PIC_Y + (y + off) * pc, pc, c);
+    pixel(PIC_X + x * pc, PIC_Y + (y + off) * pc, pc, c, modAt(x, y), game.hidden && game.hidden[y][x], game.ice ? game.ice[y][x] : 0, game.locked, game.goldHp && game.goldHp[y][x]);
   }
-  for (const p of projs) block(PIC_X + p.px * pc, PIC_Y + p.py * pc, pc, p.pcolor, 0.85);
+  for (const p of projs) if (!p.kept) block(PIC_X + p.px * pc, PIC_Y + p.py * pc, pc, p.pcolor, 0.85);
   for (const e of effects) {
-    const k = e.t / 0.4;
+    const k = e.t / (e.life || 0.4);
     if (e.type === 'pix') {
       const s = e.s * (1 + k * 0.8);
       block(e.x + e.s / 2 - s / 2, e.y + e.s / 2 - s / 2, s, e.color, 1 - k);
@@ -450,6 +647,20 @@ function render() {
       ctx.beginPath(); ctx.arc(e.x, e.y, 2 + k * 9, 0, Math.PI * 2);
       ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 1.5; ctx.stroke();
       ctx.globalAlpha = 1;
+    } else if (e.type === 'flip') {
+      const sx = Math.abs(Math.cos(k * Math.PI)) * 1.15;
+      ctx.save(); ctx.translate(e.x + e.s / 2, e.y + e.s / 2); ctx.scale(sx, 1);
+      block(-e.s / 2, -e.s / 2, e.s, k < 0.5 ? '?' : e.color);
+      ctx.restore();
+    } else if (e.type === 'shard') {
+      ctx.fillStyle = `rgba(224,242,254,${1 - k})`;
+      for (let i = 0; i < 6; i++) { const a = i * 1.05 + 0.4, d = e.s * (0.3 + k * 0.7); ctx.fillRect(e.x + e.s / 2 + Math.cos(a) * d - 1.5, e.y + e.s / 2 + Math.sin(a) * d - 1.5, 3, 3); }
+    } else if (e.type === 'blast') {
+      ctx.globalAlpha = 1 - k; ctx.beginPath(); ctx.arc(e.x, e.y, e.r * (0.3 + k * 0.7), 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(253,186,116,.35)'; ctx.fill(); ctx.strokeStyle = '#fb923c'; ctx.lineWidth = 3; ctx.stroke();
+      ctx.globalAlpha = 1;
+    } else if (e.type === 'float') {
+      ctx.globalAlpha = 1 - k * k; text(e.text, e.x, e.y - k * 24, 16, '#fde68a', 'center', '800'); ctx.globalAlpha = 1;
     } else if (e.type === 'poof') {
       ctx.globalAlpha = 1 - k;
       ctx.beginPath(); ctx.arc(e.x, e.y, 10 + k * 14, 0, Math.PI * 2);
@@ -517,13 +728,15 @@ function render() {
   }
 
   // side columns
-  drawCoin(33, 104, 11);
-  text(String(coins), 33, 128, 15, '#fde68a', 'center', '800');
-  text('STREAK', 33, 168, 9, '#64748b', 'center', '800');
-  text(`${streak}`, 33, 188, 18, streak > 0 ? '#fb923c' : '#475569', 'center', '800');
-  text(`next ×${streakMult(streak + 1).toFixed(2).replace(/0$/, '')}`, 33, 208, 9, '#94a3b8', 'center', '700');
-  drawBooster('rainbow', 340, 88);
-  drawBooster('shuffle', 340, 168);
+  if (!tut) {
+    drawCoin(33, 104, 11);
+    text(String(coins), 33, 128, 15, '#fde68a', 'center', '800');
+    text('STREAK', 33, 168, 9, '#64748b', 'center', '800');
+    text(`${streak}`, 33, 188, 18, streak > 0 ? '#fb923c' : '#475569', 'center', '800');
+    text(`next ×${streakMult(streak + 1).toFixed(2).replace(/0$/, '')}`, 33, 208, 9, '#94a3b8', 'center', '700');
+    drawBooster('rainbow', 340, 88);
+    drawBooster('shuffle', 340, 168);
+  }
 
   // queue
   if (game.cfg.lineAim) {
@@ -533,10 +746,10 @@ function render() {
     text(selQ >= 0 ? 'DRAG FROM THE PICTURE TO AIM  ·  RELEASE TO FIRE' : game.volleyActive() ? 'VOLLEY IN FLIGHT…' : 'TAP A SHOOTER TO ARM IT',
       W / 2, 335, 10, selQ >= 0 ? '#a7f3d0' : '#64748b', 'center', '700');
   } else {
-    const lbl = game.cfg.autoLaunch ? `AUTO-LAUNCH ON  ·  BELT ${game.belt.length}/${game.beltCap}  ·  tap to switch off`
+    const lbl = storyN || tut ? `BELT ${game.belt.length}/${game.beltCap}` : game.cfg.autoLaunch ? `AUTO-LAUNCH ON  ·  BELT ${game.belt.length}/${game.beltCap}  ·  tap to switch off`
       : `TAP A SHOOTER TO LAUNCH  ·  BELT ${game.belt.length}/${game.beltCap}  ·  auto: off`;
     text(lbl, W / 2, 335, 10, game.cfg.autoLaunch ? '#a7f3d0' : '#64748b', 'center', '700');
-    buttons.push({ x: 20, y: 326, w: W - 40, h: 18, fn: () => { autoLaunch = !autoLaunch; game.cfg.autoLaunch = autoLaunch; saveMeta(); toast(autoLaunch ? 'Auto-launch on: shooters go by themselves' : 'Auto-launch off: tap shooters to launch', '#e2e8f0'); } });
+    if (!storyN && !tut) buttons.push({ x: 20, y: 326, w: W - 40, h: 18, fn: () => { autoLaunch = !autoLaunch; game.cfg.autoLaunch = autoLaunch; saveMeta(); toast(autoLaunch ? 'Auto-launch on: shooters go by themselves' : 'Auto-launch off: tap shooters to launch', '#e2e8f0'); } });
   }
   for (let i = 0; i < QN(); i++) {
     const x = QX() + i * (QW + QG);
@@ -568,7 +781,10 @@ function render() {
     const px = BX + x * BC, py = BY + y * BC;
     rr(px + 1, py + 1, BC - 2, BC - 2, 6);
     ctx.fillStyle = '#232733'; ctx.fill();
-    if (game.board[y][x]) block(px, py, BC, game.board[y][x]);
+    if (game.board[y][x]) {
+      block(px, py, BC, game.board[y][x]);
+      if (game.board[y][x] === '#') { ctx.strokeStyle = 'rgba(255,255,255,.85)'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(px + 8, py + 18); ctx.lineTo(px + 18, py + 8); ctx.moveTo(px + 8, py + 26); ctx.lineTo(px + 26, py + 8); ctx.stroke(); }
+    }
     if (clearSet && clearSet.has(y * BN + x)) {
       rr(px + 1, py + 1, BC - 2, BC - 2, 6);
       ctx.fillStyle = blocked ? 'rgba(239,68,68,.45)' : 'rgba(255,255,255,.22)'; ctx.fill();
@@ -591,8 +807,12 @@ function render() {
   }
   if (preview) for (const [x, y] of preview.p.sh) block(preview.gx0 + x * BC, preview.gy0 + y * BC, BC, preview.p.color, 0.95);
 
+  if (tut && mode === 'play') drawTut();
   if (mode === 'win' || mode === 'over') drawEnd();
-  // toasts
+  if (intro) drawIntro();
+  drawToasts();
+}
+function drawToasts() {
   toasts.forEach((t, i) => {
     const a = t.t < 0.15 ? t.t / 0.15 : t.t > 1.4 ? Math.max(0, (1.8 - t.t) / 0.4) : 1;
     ctx.globalAlpha = a;
@@ -604,11 +824,71 @@ function render() {
     text(t.text, W / 2, y, 14, t.color, 'center', '700');
     ctx.globalAlpha = 1;
   });
+}
 
-
+const FEAT = { H: ['Hidden', 'Hidden pixels show their color once a shooter can see them.'], F: ['Frozen', 'Frozen pixels need 4 hits of their own color: 3 to crack the ice, 1 to break it.'],
+  S: ['Stone', "Stone can't be broken and blocks shots."], X: ['Bomb', 'Break a bomb to blast the pixels around it.'], '*': ['Rainbow', 'Any shooter can break a rainbow pixel.'],
+  C: ['Chameleon', 'Chameleons change color. Time your shots.'], K: ['Key', 'Break every key to unlock the locked pixels.'], L: ['Locked', 'Break every key to unlock the locked pixels.'],
+  G: ['Gold', 'Gold pixels take 10 hits from any color and pay 3 coins.'], '#': ['Ice Blocks', 'Ice blocks clear with their line but give no shots.'] };
+const FEAT_ORDER = 'HFSX*CKLG#';
+function drawIntro() {
+  buttons = [];
+  ctx.fillStyle = 'rgba(8,10,14,.84)'; ctx.fillRect(0, 0, W, H);
+  rr(40, 190, 320, 340, 18); ctx.fillStyle = '#1f2430'; ctx.fill();
+  const [name, line] = FEAT[intro], s = 72, ty = 270;
+  text('New', W / 2, 218, 12, '#fde68a', 'center', '800');
+  text(intro === 'K' ? 'Key and Lock' : name, W / 2, 246, 26, '#f8fafc', 'center', '800');
+  const tile = (x, m) => {
+    if (m === '#') block(x, ty, s, '#');
+    else pixel(x, ty, s, m === 'H' ? 'R' : m === 'K' ? 'B' : 'G', m, m === 'H', 3, true, 10);
+  };
+  if (intro === 'K') { tile(W / 2 - s - 8, 'K'); tile(W / 2 + 8, 'L'); } else tile(W / 2 - s / 2, intro);
+  ctx.font = '600 15px system-ui,-apple-system,Segoe UI,Roboto,sans-serif';
+  let row = '', y = 380;
+  for (const w of line.split(' ')) {
+    if (row && ctx.measureText(row + ' ' + w).width > 270) { text(row, W / 2, y, 15, '#cbd5e1', 'center', '600'); row = w; y += 22; } else row = row ? row + ' ' + w : w;
+  }
+  text(row, W / 2, y, 15, '#cbd5e1', 'center', '600');
+  button('Got It', 70, 456, 260, 52, () => { intro = null; }, true);
+}
+function drawLevels() {
+  const lv = PB_STORY.level(viewN), locked = viewN > storyLevel, n = lv.rows.length, S = 260, px = (W - S) / 2, bw = 240, bx = (W - bw) / 2;
+  text(`Streak ${streak}`, 16, 24, 12, streak > 0 ? '#fb923c' : '#64748b', 'left', '800');
+  text(String(coins), W - 16, 24, 14, '#fde68a', 'right', '800');
+  drawCoin(W - 28 - ctx.measureText(String(coins)).width, 24, 8);
+  text(`Level ${viewN}`, W / 2, 72, 40, '#f8fafc', 'center', '800');
+  text(`${locked ? 'Locked' : viewN === storyLevel ? 'Current Level' : 'Cleared ✓'} · ${n}×${n}`, W / 2, 108, 14, locked ? '#64748b' : viewN === storyLevel ? '#fde68a' : '#a7f3d0', 'center', '700');
+  if (lv.generated) {
+    rr(W / 2 - 44, 124, 88, 20, 10); ctx.fillStyle = '#f59e0b'; ctx.fill();
+    text('GENERATED', W / 2, 134, 10, '#1f1300', 'center', '800');
+  }
+  const feats = [...new Set([...(lv.mods || []).join(''), ...(lv.boardIce ? '#' : '')])].filter(f => FEAT[f]).sort((a, b) => FEAT_ORDER.indexOf(a) - FEAT_ORDER.indexOf(b));
+  if (feats.length && !locked) text(feats.map(f => FEAT[f][0]).join(' · '), W / 2, 154, 11, '#94a3b8', 'center', '700');
+  ctx.globalAlpha = 1 - Math.abs(slide) / 90;
+  drawThumb(lv, px + slide, 170, S, !locked);
+  ctx.globalAlpha = 1;
+  [['‹', 12, -1], ['›', W - 56, 1]].forEach(([g, x, d]) => {
+    rr(x, 260, 44, 80, 12); ctx.fillStyle = '#262a35'; ctx.fill();
+    text(g, x + 22, 298, 34, viewN + d < 1 ? '#3a3f4b' : '#f1f5f9', 'center', '800');
+    buttons.push({ x, y: 260, w: 44, h: 80, fn: () => goLevel(d) });
+  });
+  if (locked) {
+    rr(bx, 468, bw, 56, 12); ctx.fillStyle = '#1a1d25'; ctx.fill();
+    text('Locked', W / 2, 496, 17, '#64748b', 'center', '700');
+    buttons.push({ x: bx, y: 468, w: bw, h: 56, fn: () => toast(`Beat Level ${storyLevel} first`, '#fca5a5') });
+  } else button(viewN === storyLevel ? 'Play' : 'Replay', bx, 468, bw, 56, () => startStory(viewN), true);
+  if (viewN !== storyLevel) {
+    text('Back to Current Level', W / 2, 558, 14, '#93c5fd', 'center', '700');
+    buttons.push({ x: W / 2 - 100, y: 536, w: 200, h: 44, fn: toLevels });
+  }
+  button('More Modes', bx, 700, bw, 46, () => { mode = 'menu'; }, false);
 }
 
 function drawMenu() {
+  text('← Levels', 16, 26, 13, '#93c5fd', 'left', '700');
+  buttons.push({ x: 8, y: 8, w: 96, h: 44, fn: toLevels });
+  text('How to Play', W - 16, 26, 13, '#93c5fd', 'right', '700');
+  buttons.push({ x: W - 116, y: 8, w: 108, h: 44, fn: startTutorial });
   text('Pixel Blast', W / 2, 54, 34, '#f8fafc', 'center', '800');
   text('Pixel Flow × Block Blast — rough prototype', W / 2, 84, 13, '#94a3b8');
   const lines = [
@@ -693,6 +973,12 @@ function drawEnd() {
   ctx.fillRect(0, 0, W, H);
   const win = mode === 'win';
   const bw = 240, x = (W - bw) / 2;
+  if (tut) {
+    text(win ? 'Tutorial complete!' : 'Board jammed', W / 2, 200, 30, win ? '#fde68a' : '#fca5a5', 'center', '800');
+    button(win ? 'Start Level 1' : 'Try Again', x, 300, bw, 52, win ? toLevels : startTutorial, true);
+    if (!win) button('Skip', x, 364, bw, 52, skipTut, false);
+    return;
+  }
   // --- sandstorm over ---
   if (result && result.storm) {
     text('Buried!', W / 2, 190, 32, '#fdba74', 'center', '800');
@@ -724,7 +1010,7 @@ function drawEnd() {
     return;
   }
   if (win) {
-    text('Picture cleared!', W / 2, 130, 30, '#fde68a', 'center', '800');
+    text(storyN ? `Level ${storyN} cleared!` : 'Picture cleared!', W / 2, 130, 30, '#fde68a', 'center', '800');
     drawThumb(game.level, W / 2 - 42, 160, 84, true);
     if (result.test) {
       text(`Test run · ${game.moves} moves · ${Math.round(game.time)}s`, W / 2, 300, 15, '#e2e8f0');
@@ -739,15 +1025,15 @@ function drawEnd() {
     text(`${game.moves} moves · ${Math.round(game.time)}s · score ${game.score}`, W / 2, 350, 13, '#94a3b8');
     // Only a Duel run can be challenged: elsewhere the piece order follows the picture as you
     // clear it, so your friend would be playing a different game from the same seed.
-    if (!endless && game.cfg.fairPieces) {
+    if (storyN) { /* story runs: no duel line */ } else if (!endless && game.cfg.fairPieces) {
       button('Challenge a friend', x, 376, bw, 46, () => copyShare(), false);
       drawLink(434);
     } else if (!endless) {
       text('Play this level in Duel mode to challenge a friend', W / 2, 392, 11.5, '#64748b', 'center', '600');
     }
     const next = (levelIndex + 1) % LEVELS.length;
-    button(`Next · ${LEVELS[next].name}`, x, 452, bw, 52, () => start(next, false), true);
-    button('Menu', x, 514, bw, 46, () => { mode = 'menu'; }, false);
+    button(storyN ? `Next · Level ${storyN + 1}` : `Next · ${LEVELS[next].name}`, x, 452, bw, 52, () => storyN ? startStory(storyN + 1) : start(next, false), true);
+    button(storyN ? 'Levels' : 'Menu', x, 514, bw, 46, () => { if (storyN) toLevels(); else mode = 'menu'; }, false);
   } else {
     text('Board jammed', W / 2, 200, 30, '#fca5a5', 'center', '800');
     text(`${game.countPixels()} pixels left  ·  Lines ${game.lines}${endless ? `  ·  Pictures ${game.picsCleared}` : ''}`, W / 2, 238, 15, '#e2e8f0');
@@ -769,8 +1055,8 @@ function drawEnd() {
       } });
     }
     // Retry replays exactly the level you just lost (a fresh run for endless)
-    button('Retry', x, 396, bw, 52, () => { const t = !!testLevel, lv = game.level; leaveRun(); if (endless) start(0, true); else start(levelIndex, false, lv, t); }, false);
-    button('Menu', x, 460, bw, 52, () => { leaveRun(); mode = 'menu'; }, false);
+    button('Retry', x, 396, bw, 52, () => { const t = !!testLevel, lv = game.level; leaveRun(); if (endless) start(0, true); else if (storyN) startStory(storyN); else start(levelIndex, false, lv, t); }, false);
+    button('Menu', x, 460, bw, 52, () => { leaveRun(); if (storyN) toLevels(); else mode = 'menu'; }, false);
   }
 }
 
@@ -789,7 +1075,9 @@ cv.addEventListener('pointerdown', e => {
   e.preventDefault();
   const [x, y] = pt(e);
   for (const b of buttons) if (x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h) { b.fn(); return; }
-  if (mode !== 'play') return;
+  if (mode === 'levels') swipeX = x;
+  if (mode === 'play' && tut && tut.step === 0) { tutStep(1); return; }
+  if (mode !== 'play' || intro) return;
   for (let i = 0; i < QN(); i++) {
     const qx = QX() + i * (QW + QG);
     if (x >= qx && x <= qx + QW && y >= QY && y <= QY + QH) {
@@ -836,7 +1124,8 @@ cv.addEventListener('pointermove', e => {
   if (!drag) return;
   drag.x = x; drag.y = y;
 });
-cv.addEventListener('pointerup', () => {
+cv.addEventListener('pointerup', e => {
+  if (swipeX !== null) { const dx = pt(e)[0] - swipeX; swipeX = null; if (mode === 'levels' && Math.abs(dx) > 40) goLevel(dx < 0 ? 1 : -1); }
   if (aimDrag) {
     const a = aimAngleTo(aimDrag.x, aimDrag.y);
     aimDrag = null;
@@ -850,9 +1139,12 @@ cv.addEventListener('pointerup', () => {
   if (!drag || mode !== 'play') { drag = null; return; }
   const g = dragGeom(), i = drag.i;
   drag = null;
+  const gap = tutGap();
+  if (gap && !(g.ok && g.gx === gap[0] && g.gy === gap[1])) { toast('Drop it in the glowing gap', '#fca5a5'); return; }
   if (g.ok) game.placePiece(i, g.gx, g.gy);
 });
-cv.addEventListener('pointercancel', () => { drag = null; });
+cv.addEventListener('pointercancel', () => { drag = null; swipeX = null; });
+window.addEventListener('keydown', e => { if (mode === 'levels' && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) goLevel(e.key === 'ArrowRight' ? 1 : -1); });
 
 // ---------- loop ----------
 let lastT = performance.now();
@@ -860,9 +1152,12 @@ function frame(t) {
   const dt = Math.min(0.05, (t - lastT) / 1000);
   lastT = t;
   time += dt;
-  if (mode === 'play') {
+  slide -= slide * Math.min(1, dt * 14);
+  if (mode === 'play' && !intro) {
+    if (goldToast) { goldToast = false; toast('Gold pixel: 10 hits for 3 coins', '#fde68a'); }
     game.update(dt);
     handleEvents();
+    if (tut) tutCheck();
     if (winDelay > 0) { winDelay -= dt; if (winDelay <= 0) finishWin(); }
   }
   updateFx(dt);
@@ -883,13 +1178,28 @@ if (dm && LEVELS[+dm[2]]) {
 }
 requestAnimationFrame(frame);
 
+// Splash: covers loading, then waits for a tap (editor play-tests skip it)
+const splash = document.getElementById('splash');
+if (location.hash === '#test') splash.remove();
+else {
+  const ready = () => { splash.disabled = false; splash.querySelector('p').textContent = 'Tap to Start'; splash.focus(); };
+  if (document.readyState === 'complete') ready(); else addEventListener('load', ready);
+  splash.onclick = () => { splash.classList.add('gone'); setTimeout(() => splash.remove(), 400); if (!tutorialDone && !/^#(test|duel-)/.test(location.hash)) startTutorial(); };
+}
+
 // test hooks
 window.__pb = {
   start: (i, e) => start(i, e),
+  tut: () => ({ step: tut && tut.step, tutorialDone, mode }), startTutorial, resetTutorial: () => { tutorialDone = false; saveMeta(); },
   launch: i => game.launch(i),
   clearPic: () => { for (const r of game.pic) r.fill(null); },
   share: () => shareLink,
+  story: () => ({ storyLevel, viewN, storyN, mode }),
+  storyStart: n => startStory(n),
+  setStoryLevel: n => { storyLevel = n; saveMeta(); },
+  view: n => { viewN = n; },
   stormState: () => game && ({ status: game.status, t: Math.round(game.time), shots: game.shotsFired, boss: game.bossMode, sand: game.sandMode, seed: game.seed, moves: game.moves }),
+  game: () => game, startLv: (lv, sn) => start(0, false, lv, false, sn), setIntro: k => { intro = k; }, setMode: m => { mode = m; },
   state: () => ({ level: game && game.level.id, levelIndex, mode, coins, streak, album: [...album], score: game && game.score, continues: game && game.continues, queue: game && game.queue.length, pixels: game && game.countPixels(), N: game && game.N }),
   autoPlace: () => {
     for (let i = 0; i < 3; i++) {

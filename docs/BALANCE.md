@@ -82,6 +82,32 @@ the rest of the gap with level design instead.
 The same flag makes a run exactly replayable from its seed and move list, which is what the
 regression test in [COCOS_PORT.md](COCOS_PORT.md) is built on, and what a Daily Puzzle would need.
 
+## Story levels
+
+`node sim/story.js` with auto-launch on, matching how story runs play. Sizes and the feature schedule are in [STORY.md](STORY.md).
+
+```
+n    size feat  win   win+3c        n    size feat  win   win+3c
+1    5    -     94%   100%          75   8    S     57%   100%
+3    5    -     90%   100%          100  9    S     60%   100%
+8    6    -     85%   100%          125  9    X     63%   100%
+10   6    -     68%   100%          175  10   *     55%    98%
+15   6    -     80%   100%          225  11   #     48%    98%
+17   6    F     78%   100%          250  12   #     28%    95%
+20   6    F     63%   100%          275  12   K     50%   100%
+30   7    F     60%   100%          325  13   C     43%    93%
+40   7    H     65%    98%          400  15   FH    38%    98%
+50   8    H     63%   100%          425  15   HS    33%    85%
+60   8    HG    55%    98%          500  17   SX    45%   100%
+```
+
+40–100 runs per level, so expect ±5–10 points of noise.
+
+- **Colors barely move the bot.** Picture size and pixel count drive difficulty far more, so hard levels get extra colors and 80–100% density.
+- **Feature intro levels sit within ~3 points of the levels before them.** Inside a window the features cost at most ~10–15 points against the same level with features off.
+- **Density was cut for three features.** Board ice was capped at 5 base cells: 7 cells cost ~18 points. Key/locked density was cut from .12 to .07 because it cost ~29 points. Hidden was cut from .30 to .22.
+- **The no-feature curve itself is already at 30–40% around levels 250 and 425–450.** That, more than the features, is where to tune next.
+
 ## Read-outs and next tuning steps
 - **Level 1 is too hard for a first level.** Heart is a 74% first-try win; a tutorial level should be about 95%. Options: a smaller picture, per-level easier settings (bigger combo bonus, longer belt), or a guided first level.
 - **The curve is flat.** All seven levels sit between 41% and 74%, drifting down with pixel count rather than following a designed shape. Plan for a sawtooth: easy, easy, medium, then a "hard" level every 5th or so.

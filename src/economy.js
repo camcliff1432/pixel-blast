@@ -15,6 +15,7 @@
     continueCosts: [30, 60, 120],
     booster: { rainbow: 50, shuffle: 30 },
     stormPixelsPerCoin: 20,       // sandstorm pays 1 coin per 20 pixels blasted
+    goldPixel: 3,                 // coins for breaking a gold pixel
   };
   if (typeof module !== 'undefined' && module.exports) module.exports = ECON;
   else root.PB_ECON = ECON;

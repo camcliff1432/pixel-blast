@@ -19,7 +19,7 @@
     let value = 0;
     if (n) {
       const seen = new Set(), counts = {};
-      const add = (x, y) => { const k = y * BN + x; if (!seen.has(k)) { seen.add(k); counts[b[y][x]] = (counts[b[y][x]] || 0) + 1; } };
+      const add = (x, y) => { const k = y * BN + x; if (!seen.has(k)) { seen.add(k); if (b[y][x] !== '#') counts[b[y][x]] = (counts[b[y][x]] || 0) + 1; } };
       for (const y of rows) for (let x = 0; x < BN; x++) add(x, y);
       for (const x of cols) for (let y = 0; y < BN; y++) add(x, y);
       const mult = (n >= 2 ? game.cfg.comboMult : 1) * game.ammoPerBlock;
@@ -58,7 +58,7 @@
   }
 
   function chooseMove(game) {
-    const r = game.remaining(), pend = game.pendingAmmo();
+    const r = game.remaining(true), pend = game.pendingAmmo();
     const need = {};
     const rainbowShare = (pend['*'] || 0) / Math.max(1, game.colors.length);
     for (const c of game.colors) need[c] = (r[c] || 0) - (pend[c] || 0) - rainbowShare;
@@ -79,9 +79,17 @@
   function chooseLaunch(game) {
     if (game.canLaunch() !== 'ok' || !game.queue.length) return -1;
     const exposed = game.exposedColors();
+    // any shooter is useful against a rainbow pixel, gold, or (if any color cracks it) ice
+    let wild = false;
+    for (let i = 0; i < game.lap && !wild; i++) {
+      const t = game.scanTarget(i);
+      if (!t || game.blocked(t[0], t[1])) continue;
+      const m = game.mods[t[1]][t[0]];
+      wild = m === '*' || (m === 'G' && game.cfg.goldAnyColor) || (m === 'F' && game.ice[t[1]][t[0]] > 0 && game.cfg.iceAnyColor);
+    }
     let best = -1, bestAmmo = -1;
     game.queue.forEach((s, i) => {
-      if ((s.color === '*' || exposed.has(s.color)) && s.ammo > bestAmmo) { best = i; bestAmmo = s.ammo; }
+      if ((wild || s.color === '*' || exposed.has(s.color)) && s.ammo > bestAmmo) { best = i; bestAmmo = s.ammo; }
     });
     if (best >= 0) return best;
     // nothing hittable right now: cycle the biggest shooter only when the queue is nearly full
