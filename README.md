@@ -53,6 +53,8 @@ docs/APP_STORE_LISTING.md   draft store copy, keywords, privacy-label notes
 docs/PRIVACY_POLICY.md  draft (template, not legal advice)
 docs/TERMS.md           draft (template, not legal advice)
 ROADMAP.md              plan to Google Play, the App Store and TikTok
+CLAUDE.md               working rules: who owns what, checks to run, hard rules (Claude Code reads this by itself)
+TASKS.md                the shared to-do list
 ```
 
 ## Status
